@@ -1,0 +1,57 @@
+
+# ================================
+# Environnement Python
+# ================================
+venv/
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+.python-version
+
+# ================================
+# Données (JAMAIS commit les datasets !)
+# ================================
+data/raw/
+data/processed/
+*.csv
+*.pcap
+*.pkl
+*.parquet
+
+# ================================
+# Modèles entraînés
+# ================================
+*.pth
+*.pt
+*.h5
+*.ckpt
+results/checkpoints/
+results/logs/
+
+# ================================
+# Jupyter
+# ================================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ================================
+# IDE
+# ================================
+.vscode/
+.idea/
+*.swp
+
+# ================================
+# OS
+# ================================
+.DS_Store
+Thumbs.db
+
+# ================================
+# Secrets
+# ================================
+.env
+*.key
+kaggle.json

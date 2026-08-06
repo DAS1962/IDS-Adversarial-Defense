@@ -1,0 +1,89 @@
+
+# ============================================================
+# Configuration globale du projet IDS Adversarial Defense
+# ============================================================
+
+# ---------- Environnement ----------
+env:
+  random_seed: 42
+  device: "auto"
+  num_workers: 4
+
+# ---------- Chemins ----------
+paths:
+  data_raw: "data/raw"
+  data_processed: "data/processed"
+  checkpoints: "results/checkpoints"
+  logs: "results/logs"
+  figures: "results/figures"
+
+# ---------- Dataset ----------
+dataset:
+  name: "CIC-IDS-2017"
+  num_features: 58
+  num_classes: 15
+  test_size: 0.33
+  val_size: 0.15
+
+# ---------- Modèle DNN (baseline) ----------
+model:
+  architecture: "DNN"
+  hidden_layers: [512, 256]
+  activation: "relu"
+  output_activation: "softmax"
+  dropout: 0.0
+
+# ---------- Entraînement ----------
+training:
+  batch_size: 128
+  epochs: 30
+  learning_rate: 0.01
+  optimizer: "adam"
+  loss: "cross_entropy"
+  validation_split: 0.33
+
+# ---------- Attaques ----------
+attacks:
+  FGSM:
+    eps: 0.2
+    norm: "inf"
+  BIM:
+    eps: 0.3
+    alpha: 0.01
+    steps: 100
+    norm: "inf"
+  PGD:
+    eps: 0.3
+    alpha: 0.01
+    steps: 100
+    norm: "inf"
+  CW:
+    max_iter: 9
+    norm: "l2"
+  DeepFool:
+    eps: 1.0e-6
+    max_iter: 100
+    norm: "l2"
+  JSMA:
+    theta: 0.1
+    gamma: 1.0
+
+# ---------- Défenses ----------
+defenses:
+  AdversarialTraining:
+    attack: "FGSM"
+    ratio: 0.5
+  GaussianAugmentation:
+    sigma: 0.1
+  LabelSmoothing:
+    alpha: 0.1
+  DenoisingAutoencoder:
+    hidden_dim: 32
+    l1_reg: 1.0e-4
+    noise_factor: 0.1
+
+# ---------- Ensemble ----------
+ensemble:
+  method: "majority_voting"
+  optimize_weights: true
+  bayesian_n_calls: 50
