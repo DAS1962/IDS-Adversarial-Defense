@@ -145,7 +145,7 @@ def apply_smote(X_train, y_train, random_state):
     print(f"    Total       : {len(y_train):>10,}")
 
     # Application de SMOTE
-    smote = SMOTE(random_state=random_state, n_jobs=-1)
+    smote = SMOTE(random_state=random_state)
     X_train_bal, y_train_bal = smote.fit_resample(X_train, y_train)
 
     # Distribution apres SMOTE
