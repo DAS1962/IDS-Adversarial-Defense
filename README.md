@@ -38,8 +38,8 @@ Le projet suit les 9 étapes du framework proposé par Awad et al. (2025) :
 | 1 | Collection des données | Terminée |
 | 2 | Preprocessing | Terminée |
 | 3 | Feature selection | Terminée |
-| 4 | Split train / test + normalisation + SMOTE | En cours |
-| 5 | Baseline DNN | À faire |
+| 4 | Split train/test + Normalisation + SMOTE | Terminée |
+| 5 | Baseline DNN | En cours |
 | 6 | Attaques adversariales | À faire |
 | 7 | Test de vulnérabilité | À faire |
 | 8 | Mécanismes de défense | À faire |
@@ -107,6 +107,64 @@ Sélection des 58 features les plus discriminantes via **Random Forest importanc
 - Random Forest ne gère pas les features fortement corrélées : plusieurs paires du top 10 mesurent des choses similaires (ex: `Variance` et `Std`). Le papier n'applique pas de pré-filtrage sur les corrélations, nous non plus.
 - Dataset réduit sauvegardé : `data/processed/cicids2017_selected.pkl` (1.15 GB, 59 colonnes)
 
+### Étape 4 — Split train/test + Normalisation + SMOTE
+
+Cette étape combine trois opérations dans un ordre méthodologiquement crucial pour éviter le data leakage.
+
+**Ordre d'exécution** :
+1. Split stratifié train/test (67/33)
+2. Normalisation avec StandardScaler (fit sur train uniquement, transform sur train et test)
+3. SMOTE sur le train uniquement
+
+**Résultats du split** :
+
+| Split | Nombre de lignes | Pourcentage |
+|---|---:|---:|
+| Train | 1 688 934 | 67.0% |
+| Test | 831 864 | 33.0% |
+
+Les 15 classes sont préservées dans les deux splits grâce à la stratification.
+
+**Résultats de la normalisation** :
+- Train : `mean = 0.0000`, `std = 1.0000` (par construction)
+- Test : `mean = -0.0001`, `std = 1.1645` (écart normal, confirme l'absence de data leakage)
+
+**Résultats de SMOTE** :
+
+Avant SMOTE, distribution du train extrêmement déséquilibrée :
+
+| Classe | Nombre d'exemples réels |
+|---|---:|
+| BENIGN | 1 403 688 |
+| DoS Hulk | 115 807 |
+| DDoS | 85 769 |
+| PortScan | 60 765 |
+| ... | ... |
+| Infiltration | 24 |
+| Web Attack SQL Injection | 14 |
+| **Heartbleed** | **7** |
+
+Après SMOTE, équilibrage parfait avec **1 403 688 exemples par classe** (15 classes × 1.4M = **21 055 320 lignes au total**).
+
+**19 366 386 exemples synthétiques ont été créés** pour équilibrer le dataset.
+
+**Livrables** :
+- `X_train.pkl` : 9.3 GB (features train après SMOTE et scaling)
+- `X_test.pkl` : 375 MB (features test après scaling, sans SMOTE)
+- `y_train.pkl` : 161 MB (labels train)
+- `y_test.pkl` : 19 MB (labels test)
+- `scaler.pkl` : 3.3 KB (StandardScaler entraîné, sauvegardé pour usage futur)
+
+**Notes méthodologiques critiques** :
+
+1. **Ordre des opérations** : le papier ne détaille pas explicitement l'ordre exact (split, normalisation, SMOTE). Nous avons appliqué l'ordre méthodologiquement correct pour éviter le data leakage. Toute normalisation ou SMOTE appliquée avant le split contaminerait les statistiques du test dans le train.
+
+2. **Le paramètre `n_jobs` de SMOTE** a été supprimé dans `imbalanced-learn` version 0.14+. Ne pas l'utiliser sur des versions récentes de la librairie.
+
+3. **Limite majeure de SMOTE sur les classes ultra-rares** : trois classes ont moins de 25 exemples réels dans le train (Heartbleed: 7, Web Attack SQL Injection: 14, Infiltration: 24). SMOTE a généré plus de 1.4 million d'exemples synthétiques par interpolation à partir de ces poignées d'exemples réels. La littérature recommande au minimum 100 exemples réels par classe minoritaire pour une utilisation fiable de SMOTE. En dessous de ce seuil, on entre dans une zone d'overfitting synthétique : le modèle apprend à reconnaître les interpolations de ces 7 exemples, pas la vraie distribution des attaques Heartbleed. Le papier Awad et al. applique SMOTE de la même manière sans discuter cette limitation. Les résultats sur Heartbleed, Web Attack SQL Injection et Infiltration devront donc être interprétés avec précaution.
+
+4. **Test std = 1.1645** : le fait que la standardisation du test ne donne pas exactement `std = 1.0` (comme le train) est **normal et souhaitable**. Une std exactement égale à 1.0 sur le test signalerait un data leakage. L'écart observé (16%) confirme l'indépendance des deux splits.
+
 ---
 
 ## Structure du projet
@@ -151,28 +209,21 @@ pip install torch==2.5.1 torchvision==0.20.1 \
 pip install -r requirements.txt
 
 # Installer torchattacks sans ses dépendances
-# (évite un conflit sur la version de la librairie requests)
 pip install torchattacks==3.5.1 --no-deps
 ```
 
 ### Téléchargement du dataset
 
-Le dataset CIC-IDS 2017 est téléchargé via Kaggle CLI :
-
 ```bash
-# Configurer les credentials Kaggle (voir https://www.kaggle.com/docs/api)
 mkdir -p ~/.kaggle
 # Placer votre kaggle.json dans ~/.kaggle/ puis :
 chmod 600 ~/.kaggle/kaggle.json
 
-# Télécharger et décompresser
 kaggle datasets download \
     -d chethuhn/network-intrusion-dataset \
     -p data/raw \
     --unzip
 ```
-
-Le dataset fait environ 850 MB décompressé (8 fichiers CSV, 2.8 millions de lignes).
 
 ---
 
@@ -180,13 +231,11 @@ Le dataset fait environ 850 MB décompressé (8 fichiers CSV, 2.8 millions de li
 
 Les scripts sont numérotés dans l'ordre d'exécution du pipeline.
 
-### Scripts exécutables
-
 ```bash
-# Vérifier l'environnement
+# Vérification de l'environnement
 python scripts/00_test_environment.py
 
-# Explorer le dataset
+# Exploration
 python scripts/02_explore_dataset.py
 
 # Preprocessing
@@ -194,11 +243,13 @@ python scripts/03_preprocess_dataset.py
 
 # Feature selection (via SLURM sur Alliance Canada)
 sbatch scripts/04_feature_selection.sh
+
+# Split + Normalisation + SMOTE (via SLURM)
+sbatch scripts/05_split_and_prepare.sh
 ```
 
 ### Scripts à venir
 
-- `05_split_data.py` : séparation train/test + normalisation + SMOTE
 - `06_train_baseline.py` : entraînement du DNN de référence
 - `07_generate_attacks.py` : génération des 6 attaques adversariales
 - `08_train_defenses.py` : entraînement des 4 mécanismes de défense
@@ -258,7 +309,7 @@ Le CIC-IDS 2017 contient 2.8 millions de flux réseau étiquetés en 15 classes 
 
 Le projet utilise une architecture hybride :
 
-- **Développement local** : Arch Linux, Python 3.12, VSCode (édition du code, tests rapides)
+- **Développement local** : Arch Linux, Python 3.12, VSCode
 - **Exécution intensive** : Alliance Canada (serveur nibi), Python 3.11, jobs SLURM
 - **Synchronisation** : Git + GitHub (dépôt privé)
 
@@ -268,6 +319,7 @@ Le projet utilise une architecture hybride :
 - Goodfellow et al. (2014). *Explaining and Harnessing Adversarial Examples.* ICLR.
 - Madry et al. (2017). *Towards Deep Learning Models Resistant to Adversarial Attacks.* ICLR.
 - Carlini & Wagner (2016). *Towards Evaluating the Robustness of Neural Networks.* IEEE S&P.
+- Chawla et al. (2002). *SMOTE: Synthetic Minority Over-sampling Technique.* JAIR.
 
 ---
 
