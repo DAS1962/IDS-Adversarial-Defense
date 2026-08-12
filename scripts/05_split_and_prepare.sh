@@ -1,4 +1,3 @@
-
 #!/bin/bash
 #SBATCH --job-name=split_prepare
 #SBATCH --account=def-smoolak
