@@ -37,13 +37,75 @@ Le projet suit les 9 étapes du framework proposé par Awad et al. (2025) :
 |---|---|---|
 | 1 | Collection des données | Terminée |
 | 2 | Preprocessing | Terminée |
-| 3 | Feature selection | En cours |
-| 4 | Split train / test | À faire |
+| 3 | Feature selection | Terminée |
+| 4 | Split train / test + normalisation + SMOTE | En cours |
 | 5 | Baseline DNN | À faire |
 | 6 | Attaques adversariales | À faire |
 | 7 | Test de vulnérabilité | À faire |
 | 8 | Mécanismes de défense | À faire |
 | 9 | Agrégation par ensemble | À faire |
+
+---
+
+## Journal des étapes réalisées
+
+### Étape 1 — Collection des données
+
+- Dataset **CIC-IDS 2017** téléchargé depuis Kaggle (`chethuhn/network-intrusion-dataset`)
+- **8 fichiers CSV** correspondant à 5 jours de capture (lundi bénin, mardi-vendredi avec attaques)
+- **2 830 743 lignes** au total, **79 colonnes** (78 features + 1 label)
+- **15 classes** : BENIGN (80.3%) + 14 types d'attaques
+- Stockage sur `~/scratch/` (Alliance Canada) via lien symbolique vers `data/raw/`
+
+### Étape 2 — Preprocessing
+
+Nettoyage des données brutes en 4 opérations :
+
+1. **Nettoyage des noms de colonnes** : 65 colonnes avaient un espace parasite en début de nom (`' Destination Port'` au lieu de `'Destination Port'`), artefact du séparateur `', '` utilisé par CICFlowMeter
+2. **Traitement des valeurs Inf et NaN** : 2 867 lignes supprimées (0.101%), provenant de divisions par zéro dans `Flow Bytes/s` et `Flow Packets/s` (flux instantanés avec Flow Duration = 0)
+3. **Suppression des doublons** : **307 078 doublons éliminés (10.86%)**, majoritairement issus d'attaques automatisées répétitives (PortScan, DoS Hulk, SSH-Patator)
+4. **Encodage des labels** : les 15 classes textuelles converties en entiers 0-14 via `sklearn.preprocessing.LabelEncoder`
+
+**Résultat** : dataset propre de **2 520 798 lignes × 79 colonnes**, sauvegardé en format pickle (`data/processed/cicids2017_clean.pkl`, 1.5 GB).
+
+**Note méthodologique** : la suppression des doublons n'est pas explicitement documentée dans le papier Awad et al. Cette décision peut expliquer des écarts potentiels avec leurs résultats. C'est un choix conservateur pour éviter le data leakage entre train et test.
+
+### Étape 3 — Feature selection
+
+Sélection des 58 features les plus discriminantes via **Random Forest importance**, comme décrit dans le papier.
+
+**Méthodologie** :
+- **Random Forest** entraîné sur les **2.52M lignes complètes** (fidélité au papier, pas d'échantillonnage)
+- **100 arbres**, critère de Gini, `random_state=42` pour la reproductibilité
+- Exécution sur Alliance Canada via SLURM (16 CPUs, 32 GB RAM)
+- **Durée d'exécution** : 52 secondes
+
+**Résultats clés** :
+- **Importance cumulée des 58 features retenues : 99.34%**
+- Les 20 features rejetées ne représentent que 0.66% de l'information discriminante
+- **6 features avec importance strictement nulle** (`Bwd Avg Bulk Rate`, `Fwd Avg Bulk Rate`, etc.) : artefacts de CICFlowMeter pour mesurer les transferts en rafale, non pertinents dans ce dataset
+
+**Top 10 des features les plus importantes** :
+
+| Rang | Feature | Importance |
+|---|---|---:|
+| 1 | Packet Length Variance | 0.0618 |
+| 2 | Packet Length Std | 0.0598 |
+| 3 | Avg Bwd Segment Size | 0.0565 |
+| 4 | Max Packet Length | 0.0491 |
+| 5 | Bwd Packet Length Max | 0.0422 |
+| 6 | Bwd Packet Length Std | 0.0405 |
+| 7 | Average Packet Size | 0.0397 |
+| 8 | Total Length of Bwd Packets | 0.0379 |
+| 9 | Fwd Packet Length Max | 0.0342 |
+| 10 | Total Length of Fwd Packets | 0.0333 |
+
+**Interprétation** : les 10 features les plus discriminantes concernent toutes la **distribution statistique des tailles de paquets** (variance, écart-type, moyenne, max). Cela reflète le fait que les attaques automatisées génèrent des paquets aux tailles quasi-identiques (faible variance), tandis que le trafic bénin présente une grande diversité de tailles.
+
+**Notes méthodologiques** :
+- Le papier ne précise pas les 58 features exactes qu'il a retenues, donc une comparaison directe n'est pas possible
+- Random Forest ne gère pas les features fortement corrélées : plusieurs paires du top 10 mesurent des choses similaires (ex: `Variance` et `Std`). Le papier n'applique pas de pré-filtrage sur les corrélations, nous non plus.
+- Dataset réduit sauvegardé : `data/processed/cicids2017_selected.pkl` (1.15 GB, 59 colonnes)
 
 ---
 
@@ -118,32 +180,25 @@ Le dataset fait environ 850 MB décompressé (8 fichiers CSV, 2.8 millions de li
 
 Les scripts sont numérotés dans l'ordre d'exécution du pipeline.
 
-### 1. Vérifier l'environnement
+### Scripts exécutables
 
 ```bash
+# Vérifier l'environnement
 python scripts/00_test_environment.py
-```
 
-### 2. Explorer le dataset
-
-```bash
+# Explorer le dataset
 python scripts/02_explore_dataset.py
-```
 
-Analyse la distribution des classes, les valeurs manquantes et les problèmes de format. Génère un rapport dans `results/logs/`.
-
-### 3. Preprocessing
-
-```bash
+# Preprocessing
 python scripts/03_preprocess_dataset.py
-```
 
-Nettoie les données et sauvegarde le résultat dans `data/processed/cicids2017_clean.pkl`.
+# Feature selection (via SLURM sur Alliance Canada)
+sbatch scripts/04_feature_selection.sh
+```
 
 ### Scripts à venir
 
-- `04_feature_selection.py` : sélection des 58 features les plus importantes
-- `05_split_data.py` : séparation train/test/validation
+- `05_split_data.py` : séparation train/test + normalisation + SMOTE
 - `06_train_baseline.py` : entraînement du DNN de référence
 - `07_generate_attacks.py` : génération des 6 attaques adversariales
 - `08_train_defenses.py` : entraînement des 4 mécanismes de défense
@@ -204,7 +259,7 @@ Le CIC-IDS 2017 contient 2.8 millions de flux réseau étiquetés en 15 classes 
 Le projet utilise une architecture hybride :
 
 - **Développement local** : Arch Linux, Python 3.12, VSCode (édition du code, tests rapides)
-- **Exécution intensive** : Alliance Canada (serveur nibi), Python 3.11, entraînements GPU
+- **Exécution intensive** : Alliance Canada (serveur nibi), Python 3.11, jobs SLURM
 - **Synchronisation** : Git + GitHub (dépôt privé)
 
 ## Références principales
