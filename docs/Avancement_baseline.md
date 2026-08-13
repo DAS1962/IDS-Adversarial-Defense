@@ -4,7 +4,7 @@
 
 ---
 
-## Slide 1 — Titre
+
 
 **Baseline DNN — Reproduction Awad et al. (2025)**
 Point d'avancement stage IDS Adversarial Defense
@@ -12,7 +12,7 @@ Point d'avancement stage IDS Adversarial Defense
 
 ---
 
-## Slide 2 — Résultats obtenus
+## Résultats obtenus
 
 - Accuracy globale : **90.69%**
 - F1 macro : 47.13%
@@ -23,7 +23,7 @@ Point d'avancement stage IDS Adversarial Defense
 
 ---
 
-## Slide 3 — Comportement pendant l'entraînement
+## Comportement pendant l'entraînement
 
 - Meilleur modèle atteint à **l'epoch 2**
 - Dégradation progressive ensuite
@@ -33,7 +33,7 @@ Le modèle "désapprend" après avoir bien commencé.
 
 ---
 
-## Slide 4 — Fidèle au papier
+## Fidèle au papier
 
 - Architecture : 58 → 512 → 256 → 15
 - Optimizer : Adam
@@ -44,7 +44,7 @@ Le modèle "désapprend" après avoir bien commencé.
 
 ---
 
-## Slide 5 — Décisions face aux ambiguïtés du papier
+## Décisions face aux ambiguïtés du papier
 
 Le papier ne précise pas :
 
@@ -57,7 +57,7 @@ Le papier ne précise pas :
 
 ---
 
-## Slide 6 — Impact de nos choix
+## Impact de nos choix
 
 - Suppression de 11% de doublons → moins de données
 - SMOTE équilibrage total → train passe à 21M lignes
@@ -67,7 +67,7 @@ Ces choix expliquent probablement l'instabilité observée.
 
 ---
 
-## Slide 7 — Problème principal : instabilité
+## Problème principal : instabilité
 
 - lr=0.01 + 21M lignes = trop d'itérations trop agressives
 - Le modèle diverge après epoch 2
@@ -75,7 +75,7 @@ Ces choix expliquent probablement l'instabilité observée.
 
 ---
 
-## Slide 8 — Problème secondaire : SMOTE
+## Problème secondaire : SMOTE
 
 - Heartbleed : 7 exemples réels → 1.4M synthétiques
 - Modèle prédit "Heartbleed" pour 32k faux positifs
@@ -83,7 +83,7 @@ Ces choix expliquent probablement l'instabilité observée.
 
 ---
 
-## Slide 9 — Solutions envisagées
+## Solutions envisagées
 
 1. Réduire le learning rate (0.001)
 2. Ajouter early stopping
@@ -101,7 +101,7 @@ Ces choix expliquent probablement l'instabilité observée.
 
 ---
 
-## Slide 11 — Plan proposé
+## Plan proposé
 
 - Garder script actuel = "reproduction fidèle"
 - Développer version "améliorée"
@@ -110,7 +110,7 @@ Ces choix expliquent probablement l'instabilité observée.
 
 ---
 
-## Slide 12 — Livrables
+## Livrables
 
 - GitHub : DAS1962/IDS-Adversarial-Defense
 - Étapes 1 à 5 complétées et documentées
