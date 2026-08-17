@@ -48,13 +48,14 @@ LOG_DIR = Path("results/logs")
 
 # Hyperparamètres
 BATCH_SIZE = 128
-LEARNING_RATE = 0.01
+LEARNING_RATE = 0.001
 NUM_EPOCHS = 30
 RANDOM_STATE = 42
 
 # Paramètres du learning rate scheduler
-SCHEDULER_FACTOR = 0.1      # Divise le lr par 10 quand plateau détecté
-SCHEDULER_PATIENCE = 2      # Attendre 2 epochs sans amélioration avant de réduire
+SCHEDULER_FACTOR = 0.5          # reductions plus douces
+SCHEDULER_PATIENCE = 5          # plus tolerant
+SCHEDULER_MIN_LR = 1e-5         #ne pas descendre en dessous
 
 # Configuration technique
 NUM_WORKERS = 4  # Chargement parallèle des batches
@@ -263,6 +264,7 @@ def train_model(model, train_loader, test_loader, num_epochs, learning_rate, dev
         mode='min',
         factor=SCHEDULER_FACTOR,
         patience=SCHEDULER_PATIENCE,
+        min_lr=SCHEDULER_MIN_LR, 
     )
 
     # Historique pour analyse
