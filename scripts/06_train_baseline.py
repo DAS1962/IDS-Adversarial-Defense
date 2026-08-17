@@ -2,9 +2,11 @@
 """
 Entraînement du DNN baseline sur CIC-IDS 2017.
 
-Reproduction fidèle des hyperparamètres du papier Awad et al. (2025) :
+Reproduction des hyperparamètres du papier Awad et al. (2025) avec ajout
+d'un learning rate scheduler pour stabiliser l'entraînement :
   - Architecture : 58 -> 512 -> 256 -> 15
-  - Optimizer   : Adam avec learning_rate = 0.01
+  - Optimizer   : Adam avec learning_rate initial = 0.01
+  - Scheduler   : ReduceLROnPlateau (divise le lr par 10 si test_loss stagne)
   - Loss        : CrossEntropyLoss
   - Batch size  : 128
   - Epochs      : 30
@@ -26,6 +28,7 @@ import torch.nn as nn
 from pathlib import Path
 from datetime import datetime
 from torch.utils.data import Dataset, DataLoader
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -38,32 +41,28 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.models.dnn import BaselineDNN, count_parameters
 
 
-# ============================================================
-# Configuration
-# ============================================================
-
+# Chemins des dossiers
 DATA_DIR = Path("data/processed")
 CHECKPOINT_DIR = Path("results/checkpoints")
 LOG_DIR = Path("results/logs")
 
-# Hyperparamètres (fidèles au papier)
+# Hyperparamètres
 BATCH_SIZE = 128
 LEARNING_RATE = 0.01
 NUM_EPOCHS = 30
 RANDOM_STATE = 42
 
+# Paramètres du learning rate scheduler
+SCHEDULER_FACTOR = 0.1      # Divise le lr par 10 quand plateau détecté
+SCHEDULER_PATIENCE = 2      # Attendre 2 epochs sans amélioration avant de réduire
+
 # Configuration technique
 NUM_WORKERS = 4  # Chargement parallèle des batches
 
 
-# ============================================================
-# Dataset PyTorch
-# ============================================================
-
+# Dataset PyTorch pour les données IDS
 class IDSDataset(Dataset):
     """
-    Dataset PyTorch pour les données IDS.
-
     Convertit les DataFrames pandas en tensors PyTorch à la volée.
     Les données sont stockées en RAM (déjà chargées), le dataset ne fait
     que les indexer et convertir.
@@ -87,14 +86,10 @@ class IDSDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-# ============================================================
-# Fonction 1 : Charger les données
-# ============================================================
-
+# Fonction 1 : charger les données
 def load_data(data_dir):
     """
     Charge les fichiers pickle produits par l'étape 4.
-
     Retourne 4 objets : X_train, X_test, y_train, y_test.
     """
     print("Chargement des données...")
@@ -119,10 +114,7 @@ def load_data(data_dir):
     return X_train, X_test, y_train, y_test
 
 
-# ============================================================
-# Fonction 2 : Créer les DataLoaders
-# ============================================================
-
+# Fonction 2 : créer les DataLoaders
 def create_dataloaders(X_train, y_train, X_test, y_test, batch_size, num_workers):
     """
     Crée les DataLoaders PyTorch pour train et test.
@@ -158,14 +150,10 @@ def create_dataloaders(X_train, y_train, X_test, y_test, batch_size, num_workers
     return train_loader, test_loader
 
 
-# ============================================================
-# Fonction 3 : Boucle d'entraînement pour une epoch
-# ============================================================
-
+# Fonction 3 : boucle d'entraînement pour une epoch
 def train_one_epoch(model, loader, optimizer, criterion, device):
     """
     Effectue une passe complète sur les données d'entraînement.
-
     Retourne la loss moyenne et l'accuracy sur cette epoch.
     """
     model.train()  # Mode entraînement (active dropout, batchnorm, etc.)
@@ -203,14 +191,10 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
     return total_loss / total, correct / total
 
 
-# ============================================================
-# Fonction 4 : Évaluation sur le test
-# ============================================================
-
+# Fonction 4 : évaluation sur le test
 def evaluate(model, loader, criterion, device):
     """
     Évalue le modèle sur un dataset (typiquement le test).
-
     Retourne loss moyenne, accuracy, et les prédictions complètes
     pour analyse détaillée (matrice de confusion, F1).
     """
@@ -247,29 +231,39 @@ def evaluate(model, loader, criterion, device):
     )
 
 
-# ============================================================
-# Fonction 5 : Boucle principale d'entraînement
-# ============================================================
-
+# Fonction 5 : boucle principale d'entraînement
 def train_model(model, train_loader, test_loader, num_epochs, learning_rate, device):
     """
     Boucle d'entraînement complète sur num_epochs.
 
+    Utilise ReduceLROnPlateau pour ajuster automatiquement le learning rate
+    quand la test_loss stagne : divise le lr par 10 après 2 epochs sans
+    amélioration. Ceci stabilise l'entraînement quand lr=0.01 devient trop
+    élevé pour continuer à converger.
+
     Sauvegarde le meilleur modèle basé sur l'accuracy test.
     Retourne l'historique des métriques pour analyse.
     """
-    print("=" * 60)
     print("Début de l'entraînement")
-    print("=" * 60)
-    print(f"  Device        : {device}")
-    print(f"  Epochs        : {num_epochs}")
-    print(f"  Learning rate : {learning_rate}")
-    print(f"  Batch size    : {train_loader.batch_size}")
+    print(f"  Device            : {device}")
+    print(f"  Epochs            : {num_epochs}")
+    print(f"  Learning rate init: {learning_rate}")
+    print(f"  Scheduler         : ReduceLROnPlateau (factor={SCHEDULER_FACTOR}, patience={SCHEDULER_PATIENCE})")
+    print(f"  Batch size        : {train_loader.batch_size}")
     print()
 
-    # Optimizer et loss (fidèles au papier)
+    # Optimizer et loss
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.CrossEntropyLoss()
+
+    # Learning rate scheduler : réduit le lr si test_loss stagne
+    # mode='min' : on surveille une métrique à minimiser (la loss)
+    scheduler = ReduceLROnPlateau(
+        optimizer,
+        mode='min',
+        factor=SCHEDULER_FACTOR,
+        patience=SCHEDULER_PATIENCE,
+    )
 
     # Historique pour analyse
     history = {
@@ -277,6 +271,7 @@ def train_model(model, train_loader, test_loader, num_epochs, learning_rate, dev
         "train_acc": [],
         "test_loss": [],
         "test_acc": [],
+        "learning_rate": [],
         "epoch_time": [],
     }
 
@@ -285,6 +280,9 @@ def train_model(model, train_loader, test_loader, num_epochs, learning_rate, dev
 
     for epoch in range(1, num_epochs + 1):
         start_time = time.time()
+
+        # Récupérer le lr courant avant l'entraînement de l'epoch
+        current_lr = optimizer.param_groups[0]['lr']
 
         # Entraînement
         train_loss, train_acc = train_one_epoch(
@@ -298,16 +296,18 @@ def train_model(model, train_loader, test_loader, num_epochs, learning_rate, dev
 
         epoch_time = time.time() - start_time
 
-        # Enregistrer
+        # Enregistrer dans l'historique
         history["train_loss"].append(train_loss)
         history["train_acc"].append(train_acc)
         history["test_loss"].append(test_loss)
         history["test_acc"].append(test_acc)
+        history["learning_rate"].append(current_lr)
         history["epoch_time"].append(epoch_time)
 
-        # Log
+        # Log avec le lr courant
         print(
             f"Epoch {epoch:2d}/{num_epochs} | "
+            f"lr={current_lr:.6f} | "
             f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} | "
             f"test_loss={test_loss:.4f} test_acc={test_acc:.4f} | "
             f"time={epoch_time:.1f}s"
@@ -325,10 +325,20 @@ def train_model(model, train_loader, test_loader, num_epochs, learning_rate, dev
                     "optimizer_state_dict": optimizer.state_dict(),
                     "test_acc": test_acc,
                     "test_loss": test_loss,
+                    "learning_rate": current_lr,
                 },
                 CHECKPOINT_DIR / "baseline_best.pth",
             )
             print(f"           -> Nouveau meilleur modèle sauvegardé ({test_acc:.4f})")
+
+        # Ajuster le lr en fonction de la test_loss
+        # Doit être appelé APRES l'évaluation, avec la métrique surveillée
+        scheduler.step(test_loss)
+
+        # Détecter et logger si le lr a été réduit
+        new_lr = optimizer.param_groups[0]['lr']
+        if new_lr < current_lr:
+            print(f"           -> Learning rate reduit : {current_lr:.6f} -> {new_lr:.6f}")
 
     print()
     print(f"Meilleur modèle : epoch {best_epoch}, test_acc = {best_test_acc:.4f}")
@@ -337,10 +347,7 @@ def train_model(model, train_loader, test_loader, num_epochs, learning_rate, dev
     return history
 
 
-# ============================================================
-# Fonction 6 : Évaluation finale détaillée
-# ============================================================
-
+# Fonction 6 : évaluation finale détaillée
 def final_evaluation(model, test_loader, device, label_encoder=None):
     """
     Évaluation finale complète sur le test :
@@ -349,9 +356,7 @@ def final_evaluation(model, test_loader, device, label_encoder=None):
     - Classification report par classe
     - Matrice de confusion
     """
-    print("=" * 60)
     print("Évaluation finale sur le test set")
-    print("=" * 60)
 
     criterion = nn.CrossEntropyLoss()
     test_loss, test_acc, predictions, labels = evaluate(
@@ -391,15 +396,10 @@ def final_evaluation(model, test_loader, device, label_encoder=None):
     }
 
 
-# ============================================================
 # Fonction principale
-# ============================================================
-
 def main():
-    print("=" * 60)
     print("Baseline DNN — CIC-IDS 2017")
     print(f"Date : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 60)
     print()
 
     # Reproductibilité
@@ -444,6 +444,7 @@ def main():
     model.load_state_dict(checkpoint["model_state_dict"])
     print(f"  Meilleur epoch : {checkpoint['epoch']}")
     print(f"  Test accuracy  : {checkpoint['test_acc']:.4f}")
+    print(f"  Learning rate  : {checkpoint['learning_rate']:.6f}")
     print()
 
     # Chargement du label encoder pour les noms de classes
@@ -462,9 +463,7 @@ def main():
     print(f"Historique sauvegardé : {LOG_DIR / f'baseline_training_{timestamp}.pkl'}")
 
     print()
-    print("=" * 60)
     print("Baseline DNN terminé")
-    print("=" * 60)
 
 
 if __name__ == "__main__":
