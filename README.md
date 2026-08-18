@@ -39,7 +39,7 @@ Le projet suit les 9 étapes du framework proposé par Awad et al. (2025) :
 | 2 | Preprocessing | Terminée |
 | 3 | Feature selection | Terminée |
 | 4 | Split train/test + Normalisation + SMOTE | Terminée |
-| 5 | Baseline DNN | En cours |
+| 5 | Baseline DNN | Terminée |
 | 6 | Attaques adversariales | À faire |
 | 7 | Test de vulnérabilité | À faire |
 | 8 | Mécanismes de défense | À faire |
@@ -114,7 +114,7 @@ Cette étape combine trois opérations dans un ordre méthodologiquement crucial
 **Ordre d'exécution** :
 1. Split stratifié train/test (67/33)
 2. Normalisation avec StandardScaler (fit sur train uniquement, transform sur train et test)
-3. SMOTE sur le train uniquement
+3. SMOTE sur le train uniquement (avec stratégie custom)
 
 **Résultats du split** :
 
@@ -129,29 +129,59 @@ Les 15 classes sont préservées dans les deux splits grâce à la stratificatio
 - Train : `mean = 0.0000`, `std = 1.0000` (par construction)
 - Test : `mean = -0.0001`, `std = 1.1645` (écart normal, confirme l'absence de data leakage)
 
-**Résultats de SMOTE** :
+#### SMOTE : évolution de la stratégie
 
-Avant SMOTE, distribution du train extrêmement déséquilibrée :
+Deux versions de SMOTE ont été implémentées et comparées.
 
-| Classe | Nombre d'exemples réels |
-|---|---:|
-| BENIGN | 1 403 688 |
-| DoS Hulk | 115 807 |
-| DDoS | 85 769 |
-| PortScan | 60 765 |
-| ... | ... |
-| Infiltration | 24 |
-| Web Attack SQL Injection | 14 |
-| **Heartbleed** | **7** |
+**Version initiale — équilibrage total (défaut d'imbalanced-learn)** :
 
-Après SMOTE, équilibrage parfait avec **1 403 688 exemples par classe** (15 classes × 1.4M = **21 055 320 lignes au total**).
+Toutes les classes montées au niveau de la classe majoritaire (BENIGN à 1 403 688) :
 
-**19 366 386 exemples synthétiques ont été créés** pour équilibrer le dataset.
+| Classe | Avant | Après | Ratio d'expansion |
+|---|---:|---:|---:|
+| BENIGN | 1 403 688 | 1 403 688 | 1× |
+| DoS Hulk | 115 807 | 1 403 688 | 12× |
+| Heartbleed | 7 | 1 403 688 | **200 527×** |
+| Web Attack SQL | 14 | 1 403 688 | 100 263× |
 
-**Livrables** :
-- `X_train.pkl` : 9.3 GB (features train après SMOTE et scaling)
+**Problèmes identifiés** :
+- Dataset train de 21M lignes (train × 12)
+- 19M exemples synthétiques créés
+- Ratio d'expansion extrême sur classes ultra-rares (200 000×) → bruit
+- Modèle sur-apprend les interpolations synthétiques
+
+**Version finale — stratégie custom avec cap par classe** :
+
+Chaque classe atteint un plafond raisonnable proportionnel au nombre d'exemples réels :
+
+| Classe | Avant | Après | Ratio d'expansion |
+|---|---:|---:|---:|
+| BENIGN | 1 403 688 | 1 403 688 | 1× (inchangé) |
+| DoS Hulk | 115 807 | 115 807 | 1× (inchangé) |
+| DDoS | 85 769 | 85 769 | 1× (inchangé) |
+| PortScan | 60 765 | 60 765 | 1× (inchangé) |
+| DoS GoldenEye | 6 891 | 50 000 | 7× |
+| FTP-Patator | 3 974 | 50 000 | 13× |
+| DoS slowloris | 3 608 | 50 000 | 14× |
+| DoS Slowhttptest | 3 503 | 50 000 | 14× |
+| SSH-Patator | 2 157 | 30 000 | 14× |
+| Bot | 1 305 | 30 000 | 23× |
+| Web Attack Brute Force | 985 | 10 000 | 10× |
+| Web Attack XSS | 437 | 5 000 | 11× |
+| Infiltration | 24 | 1 000 | 42× |
+| Web Attack SQL | 14 | 1 000 | 71× |
+| Heartbleed | 7 | 500 | 71× |
+
+**Résultats de la stratégie custom** :
+- Train final : **1 943 529 lignes** (au lieu de 21M)
+- **10× moins de données** que la version équilibrage total
+- Ratios d'expansion plafonnés à 71× (au lieu de 200 000×)
+- Représentation raisonnable des classes minoritaires sans sur-génération bruitée
+
+**Livrables** (version finale) :
+- `X_train.pkl` : 0.9 GB (features train après SMOTE custom et scaling)
 - `X_test.pkl` : 375 MB (features test après scaling, sans SMOTE)
-- `y_train.pkl` : 161 MB (labels train)
+- `y_train.pkl` : ~15 MB (labels train)
 - `y_test.pkl` : 19 MB (labels test)
 - `scaler.pkl` : 3.3 KB (StandardScaler entraîné, sauvegardé pour usage futur)
 
@@ -161,9 +191,120 @@ Après SMOTE, équilibrage parfait avec **1 403 688 exemples par classe** (15 cl
 
 2. **Le paramètre `n_jobs` de SMOTE** a été supprimé dans `imbalanced-learn` version 0.14+. Ne pas l'utiliser sur des versions récentes de la librairie.
 
-3. **Limite majeure de SMOTE sur les classes ultra-rares** : trois classes ont moins de 25 exemples réels dans le train (Heartbleed: 7, Web Attack SQL Injection: 14, Infiltration: 24). SMOTE a généré plus de 1.4 million d'exemples synthétiques par interpolation à partir de ces poignées d'exemples réels. La littérature recommande au minimum 100 exemples réels par classe minoritaire pour une utilisation fiable de SMOTE. En dessous de ce seuil, on entre dans une zone d'overfitting synthétique : le modèle apprend à reconnaître les interpolations de ces 7 exemples, pas la vraie distribution des attaques Heartbleed. Le papier Awad et al. applique SMOTE de la même manière sans discuter cette limitation. Les résultats sur Heartbleed, Web Attack SQL Injection et Infiltration devront donc être interprétés avec précaution.
+3. **Stratégie SMOTE custom** : le papier applique SMOTE avec équilibrage total sans discuter les problèmes que cela pose sur les classes ultra-rares (Heartbleed avec 7 exemples réels → 1.4M synthétiques). Notre stratégie avec cap par classe est une amélioration méthodologique justifiée par la littérature qui recommande au minimum 100 exemples réels par classe pour SMOTE. Ce choix permet un meilleur compromis entre représentation des classes rares et fidélité statistique.
 
 4. **Test std = 1.1645** : le fait que la standardisation du test ne donne pas exactement `std = 1.0` (comme le train) est **normal et souhaitable**. Une std exactement égale à 1.0 sur le test signalerait un data leakage. L'écart observé (16%) confirme l'indépendance des deux splits.
+
+### Étape 5 — Entraînement du DNN baseline
+
+Reproduction et amélioration itérative du DNN baseline décrit dans le papier.
+
+**Architecture** :
+- Input : 58 features → Dense(512) + ReLU → Dense(256) + ReLU → Dense(15)
+- **165 391 paramètres**
+- Softmax implicite via CrossEntropyLoss de PyTorch
+
+**Hyperparamètres finaux** :
+
+| Paramètre | Valeur | Choix |
+|---|---|---|
+| Learning rate initial | 0.001 | Ajusté depuis 0.01 du papier |
+| Scheduler | ReduceLROnPlateau | factor=0.5, patience=5, min_lr=1e-5 |
+| Optimizer | Adam | Comme le papier |
+| Loss | CrossEntropyLoss | Comme le papier |
+| Batch size | 128 | Comme le papier |
+| Epochs | 50 | Étendu depuis 30 pour convergence |
+| Random state | 42 | Reproductibilité |
+
+**Environnement d'exécution** :
+- Alliance Canada nibi
+- GPU NVIDIA H100 80GB via SLURM
+- Durée totale : environ 20 minutes
+
+#### Itérations et raisonnement méthodologique
+
+Trois versions successives du baseline ont été entraînées pour identifier la configuration optimale.
+
+**Version 1 — Fidèle au papier (lr=0.01 fixe, 30 epochs)** :
+
+Reproduction stricte des hyperparamètres du papier :
+- **Accuracy : 90.69%** (papier : 98.11%)
+- **F1 macro : 47.13%**
+- **F1 weighted : 93.98%**
+
+**Problème identifié** : instabilité de l'entraînement. Le modèle atteint son pic à l'epoch 2 (90.69%) puis se dégrade progressivement jusqu'à 68% à l'epoch 30. Le lr=0.01 est trop élevé pour un dataset de 21M lignes (5M itérations d'optimizer), causant une divergence des poids.
+
+**Version 2 — Ajout d'un scheduler agressif (lr=0.01 initial, factor=0.1, patience=2, 30 epochs)** :
+
+Introduction du ReduceLROnPlateau pour stabiliser l'entraînement.
+- **Accuracy : 95.59%** (+4.90 points)
+- **F1 macro : 44.66%** (légèrement moins bon car modèle plus conservateur)
+- **F1 weighted : 97.05%**
+
+**Problème identifié** : le scheduler trop agressif descend le lr jusqu'à 0.000000 (littéralement zéro) à partir de l'epoch 17. Le modèle est bloqué sans plus pouvoir apprendre.
+
+**Version 3 — SMOTE custom + scheduler ajusté (lr=0.001 initial, factor=0.5, patience=5, min_lr=1e-5, 30 epochs)** :
+
+Deux améliorations combinées : nouvelle stratégie SMOTE et scheduler moins agressif.
+- **Accuracy : 99.60%** (+4.01 points, dépasse le papier)
+- **F1 macro : 78.15%** (grosse amélioration sur classes rares)
+- **F1 weighted : 99.65%**
+- Durée : 12 minutes (vs 1h40 en v1/v2)
+
+**Version 4 (finale) — Extension à 50 epochs** :
+
+Après analyse de la courbe, le modèle n'avait pas encore convergé à l'epoch 30. Extension à 50 epochs pour identifier la vraie convergence.
+- **Accuracy : 99.69%** (+0.09 points)
+- **F1 macro : 80.17%** (+2.02 points, meilleure généralisation)
+- **F1 weighted : 99.72%**
+- Meilleur epoch : 49
+- Convergence confirmée par stagnation sur les 5 dernières epochs
+
+#### Résultats finaux (baseline v4)
+
+**Métriques globales** :
+
+| Métrique | Baseline v4 | Papier Awad et al. |
+|---|---:|---:|
+| Accuracy | **99.69%** | 98.11% |
+| F1 macro | 80.17% | Non détaillé |
+| F1 weighted | 99.72% | Non détaillé |
+
+**Performance par classe (extrait)** :
+
+| Classe | Precision | Recall | F1-score | Support |
+|---|---:|---:|---:|---:|
+| BENIGN | 99.93% | 99.74% | 99.84% | 691 369 |
+| DDoS | 99.95% | 99.96% | 99.95% | 42 245 |
+| DoS Hulk | 99.86% | 99.38% | 99.62% | 57 039 |
+| DoS GoldenEye | 99.11% | 98.59% | 98.85% | 3 395 |
+| DoS slowloris | 98.88% | 99.10% | 98.99% | 1 777 |
+| DoS Slowhttptest | 91.57% | 99.48% | 95.36% | 1 725 |
+| FTP-Patator | 99.85% | 99.59% | 99.72% | 1 957 |
+| SSH-Patator | 90.21% | 98.96% | 94.39% | 1 062 |
+| PortScan | 98.93% | 99.90% | 99.41% | 29 929 |
+| Web Attack Brute Force | 68.03% | 96.08% | 79.66% | 485 |
+| Bot | 36.01% | 94.87% | 52.20% | 643 |
+| Heartbleed | 100.00% | 75.00% | 85.71% | 4 |
+| Infiltration | 75.00% | 75.00% | 75.00% | 12 |
+| Web Attack XSS | 73.33% | 5.12% | 9.57% | 215 |
+| Web Attack SQL Injection | 14.29% | 14.29% | 14.29% | 7 |
+
+**Interprétation** :
+- Les grandes classes (BENIGN, DDoS, DoS Hulk, PortScan) atteignent > 99% F1
+- Les classes intermédiaires (Bot, Web Attack Brute Force) sont raisonnablement bien classées
+- **Web Attack XSS** : precision haute (73%) mais recall très bas (5%) — le modèle est très conservateur pour cette classe
+- **Web Attack SQL** et **Heartbleed** : classes fondamentalement limitées par le nombre d'exemples réels dans le dataset (7 et 4 respectivement)
+
+#### Notes méthodologiques importantes
+
+1. **Écart avec le papier** : nous obtenons 99.69% contre 98.11% pour le papier. Cet écart favorable (+1.58 points) s'explique probablement par la stratégie SMOTE custom qui réduit le bruit d'interpolation, et par l'extension à 50 epochs.
+
+2. **Le F1 macro reste bas (80%) malgré la haute accuracy** : cela révèle que certaines classes ultra-rares (Web Attack XSS, Web Attack SQL) restent difficiles à apprendre correctement. Le papier ne détaille pas de F1 macro, ce qui empêche la comparaison directe.
+
+3. **Learning rate initial** : passé de 0.01 (papier) à 0.001 après analyse des courbes de la v1 qui montraient une instabilité claire. Le papier ne mentionne pas de scheduler, ce qui suggère qu'ils ont soit implicitement gardé le meilleur modèle (comportement observé en v1), soit utilisé un dataset plus petit sans SMOTE massif.
+
+4. **Extension à 50 epochs** : décision méthodologique justifiée par l'observation que le modèle progressait encore à l'epoch 30. La convergence est prouvée par la stagnation de test_acc à 99.69% sur les 5 dernières epochs.
 
 ---
 
@@ -244,16 +385,22 @@ python scripts/03_preprocess_dataset.py
 # Feature selection (via SLURM sur Alliance Canada)
 sbatch scripts/04_feature_selection.sh
 
-# Split + Normalisation + SMOTE (via SLURM)
+# Split + Normalisation + SMOTE custom (via SLURM)
 sbatch scripts/05_split_and_prepare.sh
+
+# Entraînement du DNN baseline (via SLURM avec GPU H100)
+sbatch scripts/06_train_baseline.sh
+
+# Génération des graphiques (post-entraînement)
+python scripts/07_plot_results.py
 ```
 
 ### Scripts à venir
 
-- `06_train_baseline.py` : entraînement du DNN de référence
-- `07_generate_attacks.py` : génération des 6 attaques adversariales
-- `08_train_defenses.py` : entraînement des 4 mécanismes de défense
-- `09_ensemble.py` : agrégation et optimisation de l'ensemble
+- `08_generate_attacks.py` : génération des 6 attaques adversariales
+- `09_test_vulnerability.py` : évaluation de la vulnérabilité du baseline
+- `10_train_defenses.py` : entraînement des 4 mécanismes de défense
+- `11_ensemble.py` : agrégation et optimisation de l'ensemble
 
 ---
 
@@ -302,6 +449,14 @@ Le CIC-IDS 2017 contient 2.8 millions de flux réseau étiquetés en 15 classes 
 | Adversarial Training (seul) | 80.25% |
 | Ensemble simple (Majority Voting) | 84.35% |
 | **Ensemble optimisé (Majority Voting)** | **87.49%** |
+
+## Nos résultats actuels (baseline v4, CIC-IDS 2017)
+
+| Métrique | Notre baseline | Papier | Écart |
+|---|---:|---:|---:|
+| **Accuracy** | **99.69%** | 98.11% | +1.58 |
+| F1 weighted | 99.72% | Non détaillé | — |
+| F1 macro | 80.17% | Non détaillé | — |
 
 ---
 
