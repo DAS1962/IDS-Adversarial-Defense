@@ -49,7 +49,7 @@ LOG_DIR = Path("results/logs")
 # Hyperparamètres
 BATCH_SIZE = 128
 LEARNING_RATE = 0.001
-NUM_EPOCHS = 30
+NUM_EPOCHS = 50
 RANDOM_STATE = 42
 
 # Paramètres du learning rate scheduler
