@@ -29,6 +29,7 @@ data/processed/
 *.ckpt
 results/checkpoints/
 results/logs/
+!results/figures/final_*
 
 # ================================
 # Jupyter
