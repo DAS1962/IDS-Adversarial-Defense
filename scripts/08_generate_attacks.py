@@ -12,17 +12,28 @@ Attaques implémentées (référence : Awad et al. 2025) :
 
 Pour chaque attaque :
   1. Génération des exemples adversariaux sur tout le test set
+     (skip si le fichier X_adv_*.pkl existe déjà)
   2. Sauvegarde des X_adv en pickle
   3. Évaluation du baseline (accuracy, precision, recall, F1) sur les X_adv
   4. Sauvegarde des métriques
 
 Correspond aux étapes 6 et 7 du framework Awad et al. (2025).
+
+Note technique : patch np.product pour compatibilité NumPy 2.x avec ART 1.18.
+Le patch doit être appliqué AVANT l'import d'ART.
 """
 
 import sys
 import time
 import joblib
 import numpy as np
+
+# Patch pour compatibilité ART 1.18 avec NumPy 2.x
+# np.product a été supprimé, ART l'utilise encore dans SaliencyMapMethod (JSMA).
+# Doit être appliqué AVANT l'import de art.attacks.evasion.
+if not hasattr(np, 'product'):
+    np.product = np.prod
+
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -131,6 +142,24 @@ def create_art_classifier(model, device):
         device_type="gpu" if device.type == "cuda" else "cpu",
     )
     return art_classifier
+
+
+def load_or_none(name):
+    """
+    Tente de charger un X_adv déjà généré.
+    Retourne le tableau si le fichier existe, None sinon.
+    Cette fonction permet de reprendre une exécution interrompue sans
+    régénérer les attaques déjà faites.
+    """
+    path = ATTACKS_DIR / f"X_adv_{name.lower()}.pkl"
+    if path.exists():
+        print(f"  Fichier {path.name} déjà présent, chargement...")
+        X_adv = joblib.load(path)
+        taille_mb = path.stat().st_size / (1024 * 1024)
+        print(f"  Chargé : {X_adv.shape} ({taille_mb:.1f} MB)")
+        print()
+        return X_adv
+    return None
 
 
 def generate_torchattacks_batch(attack, X_batch, y_batch, device):
@@ -272,7 +301,6 @@ def print_summary_table(all_results, baseline_metrics):
     print("Résumé complet des attaques adversariales")
     print("=" * 100)
 
-    # En-têtes
     header = (
         f"{'Attaque':<12} "
         f"{'Accuracy':>10} "
@@ -360,73 +388,85 @@ def main():
     all_results = []
 
     # 1. FGSM
-    attack = torchattacks.FGSM(model, eps=ATTACK_CONFIGS["FGSM"]["eps"])
-    X_adv_fgsm = generate_torchattacks(attack, X_test, y_test, device, "FGSM")
-    save_adversarial_examples(X_adv_fgsm, "FGSM", ATTACKS_DIR)
+    X_adv_fgsm = load_or_none("FGSM")
+    if X_adv_fgsm is None:
+        attack = torchattacks.FGSM(model, eps=ATTACK_CONFIGS["FGSM"]["eps"])
+        X_adv_fgsm = generate_torchattacks(attack, X_test, y_test, device, "FGSM")
+        save_adversarial_examples(X_adv_fgsm, "FGSM", ATTACKS_DIR)
     result = evaluate_attack(model, X_adv_fgsm, y_test, device, "FGSM")
     all_results.append(result)
     del X_adv_fgsm
 
     # 2. BIM
-    attack = torchattacks.BIM(
-        model,
-        eps=ATTACK_CONFIGS["BIM"]["eps"],
-        alpha=ATTACK_CONFIGS["BIM"]["alpha"],
-        steps=ATTACK_CONFIGS["BIM"]["steps"],
-    )
-    X_adv_bim = generate_torchattacks(attack, X_test, y_test, device, "BIM")
-    save_adversarial_examples(X_adv_bim, "BIM", ATTACKS_DIR)
+    X_adv_bim = load_or_none("BIM")
+    if X_adv_bim is None:
+        attack = torchattacks.BIM(
+            model,
+            eps=ATTACK_CONFIGS["BIM"]["eps"],
+            alpha=ATTACK_CONFIGS["BIM"]["alpha"],
+            steps=ATTACK_CONFIGS["BIM"]["steps"],
+        )
+        X_adv_bim = generate_torchattacks(attack, X_test, y_test, device, "BIM")
+        save_adversarial_examples(X_adv_bim, "BIM", ATTACKS_DIR)
     result = evaluate_attack(model, X_adv_bim, y_test, device, "BIM")
     all_results.append(result)
     del X_adv_bim
 
     # 3. PGD
-    attack = torchattacks.PGD(
-        model,
-        eps=ATTACK_CONFIGS["PGD"]["eps"],
-        alpha=ATTACK_CONFIGS["PGD"]["alpha"],
-        steps=ATTACK_CONFIGS["PGD"]["steps"],
-    )
-    X_adv_pgd = generate_torchattacks(attack, X_test, y_test, device, "PGD")
-    save_adversarial_examples(X_adv_pgd, "PGD", ATTACKS_DIR)
+    X_adv_pgd = load_or_none("PGD")
+    if X_adv_pgd is None:
+        attack = torchattacks.PGD(
+            model,
+            eps=ATTACK_CONFIGS["PGD"]["eps"],
+            alpha=ATTACK_CONFIGS["PGD"]["alpha"],
+            steps=ATTACK_CONFIGS["PGD"]["steps"],
+        )
+        X_adv_pgd = generate_torchattacks(attack, X_test, y_test, device, "PGD")
+        save_adversarial_examples(X_adv_pgd, "PGD", ATTACKS_DIR)
     result = evaluate_attack(model, X_adv_pgd, y_test, device, "PGD")
     all_results.append(result)
     del X_adv_pgd
 
     # 4. DeepFool
-    attack = DeepFool(
-        classifier=art_classifier,
-        max_iter=ATTACK_CONFIGS["DeepFool"]["max_iter"],
-        epsilon=ATTACK_CONFIGS["DeepFool"]["epsilon"],
-        batch_size=BATCH_SIZE,
-    )
-    X_adv_df = generate_art_attack(attack, X_test, y_test, "DeepFool")
-    save_adversarial_examples(X_adv_df, "DeepFool", ATTACKS_DIR)
+    X_adv_df = load_or_none("DeepFool")
+    if X_adv_df is None:
+        attack = DeepFool(
+            classifier=art_classifier,
+            max_iter=ATTACK_CONFIGS["DeepFool"]["max_iter"],
+            epsilon=ATTACK_CONFIGS["DeepFool"]["epsilon"],
+            batch_size=BATCH_SIZE,
+        )
+        X_adv_df = generate_art_attack(attack, X_test, y_test, "DeepFool")
+        save_adversarial_examples(X_adv_df, "DeepFool", ATTACKS_DIR)
     result = evaluate_attack(model, X_adv_df, y_test, device, "DeepFool")
     all_results.append(result)
     del X_adv_df
 
     # 5. JSMA
-    attack = SaliencyMapMethod(
-        classifier=art_classifier,
-        theta=ATTACK_CONFIGS["JSMA"]["theta"],
-        gamma=ATTACK_CONFIGS["JSMA"]["gamma"],
-        batch_size=BATCH_SIZE,
-    )
-    X_adv_jsma = generate_art_attack(attack, X_test, y_test, "JSMA")
-    save_adversarial_examples(X_adv_jsma, "JSMA", ATTACKS_DIR)
+    X_adv_jsma = load_or_none("JSMA")
+    if X_adv_jsma is None:
+        attack = SaliencyMapMethod(
+            classifier=art_classifier,
+            theta=ATTACK_CONFIGS["JSMA"]["theta"],
+            gamma=ATTACK_CONFIGS["JSMA"]["gamma"],
+            batch_size=BATCH_SIZE,
+        )
+        X_adv_jsma = generate_art_attack(attack, X_test, y_test, "JSMA")
+        save_adversarial_examples(X_adv_jsma, "JSMA", ATTACKS_DIR)
     result = evaluate_attack(model, X_adv_jsma, y_test, device, "JSMA")
     all_results.append(result)
     del X_adv_jsma
 
     # 6. C&W
-    attack = CarliniL2Method(
-        classifier=art_classifier,
-        max_iter=ATTACK_CONFIGS["CW"]["max_iter"],
-        batch_size=BATCH_SIZE,
-    )
-    X_adv_cw = generate_art_attack(attack, X_test, y_test, "CW")
-    save_adversarial_examples(X_adv_cw, "CW", ATTACKS_DIR)
+    X_adv_cw = load_or_none("CW")
+    if X_adv_cw is None:
+        attack = CarliniL2Method(
+            classifier=art_classifier,
+            max_iter=ATTACK_CONFIGS["CW"]["max_iter"],
+            batch_size=BATCH_SIZE,
+        )
+        X_adv_cw = generate_art_attack(attack, X_test, y_test, "CW")
+        save_adversarial_examples(X_adv_cw, "CW", ATTACKS_DIR)
     result = evaluate_attack(model, X_adv_cw, y_test, device, "CW")
     all_results.append(result)
     del X_adv_cw
