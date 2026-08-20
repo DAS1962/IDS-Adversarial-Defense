@@ -306,6 +306,63 @@ Après analyse de la courbe, le modèle n'avait pas encore convergé à l'epoch 
 
 4. **Extension à 50 epochs** : décision méthodologique justifiée par l'observation que le modèle progressait encore à l'epoch 30. La convergence est prouvée par la stagnation de test_acc à 99.69% sur les 5 dernières epochs.
 
+### Étape 6 — Génération des attaques adversariales
+
+Six attaques adversariales ont été implémentées et évaluées sur le baseline v4 :
+
+**Résultats obtenus** (test complet, 831 864 échantillons) :
+
+| Attaque | Accuracy | F1 macro | F1 weighted | Chute vs baseline |
+|---|---:|---:|---:|---|
+| Baseline (données propres) | 99.69% | 80.17% | 99.72% | référence |
+| FGSM | 83.25% | 6.34% | 75.88% | -16.4 pts |
+| BIM | 72.10% | 5.61% | 69.86% | -27.6 pts |
+| PGD | 78.48% | 5.86% | 73.09% | -21.2 pts |
+| DeepFool | 16.71% | 2.86% | 25.14% | **-82.9 pts** |
+| JSMA | En cours | — | — | — |
+| C&W | En attente | — | — | — |
+
+**Observations clés** :
+
+- **DeepFool** est l'attaque la plus dévastatrice (accuracy chute à 16.71%), cohérent avec la littérature
+- Les attaques L∞ (FGSM, BIM, PGD) sont efficaces sur les classes minoritaires mais moins que sur les majoritaires
+- Le F1 macro chute drastiquement (~6% vs 80%) : les classes minoritaires sont presque totalement échouées sous toutes les attaques
+
+**Défis techniques rencontrés** :
+
+**1. Bug de compatibilité NumPy 2.x avec ART 1.18**
+
+`SaliencyMapMethod` (JSMA) utilise `np.product` qui a été supprimé dans NumPy 2.x. Correction appliquée via monkey-patch :
+
+```python
+if not hasattr(np, 'product'):
+    np.product = np.prod
+```
+
+Le patch doit être appliqué **avant** l'import d'ART.
+
+**2. Coût computationnel prohibitif de JSMA**
+
+L'implémentation JSMA de ART calcule pour chaque échantillon un jacobien complet (58 features × 15 classes = 870 dérivées partielles), puis modifie itérativement 2 features à la fois jusqu'à faire changer la classification.
+
+**Mesure empirique** : sur H100, JSMA traite environ **5.5 batches/heure** (batch_size=512), soit 2 800 échantillons/heure.
+
+**Extrapolation** : pour 831 864 échantillons, temps estimé = **12.4 jours** de calcul GPU continu.
+
+**Contrainte SLURM** : la partition GPU maximale de nibi (`gpubase_bygpu_b5`) permet jusqu'à 7 jours par job. Il est donc **techniquement impossible** de compléter JSMA sur le full test set en un seul job.
+
+**Choix méthodologique** :
+
+Un job de 7 jours (168h) a été lancé pour obtenir une preuve empirique de cette limitation, atteignant environ 57% de progression avant timeout. Suite à cela, JSMA sera appliqué sur un **échantillon stratifié** de taille réduite, pratique standard dans la littérature adversariale pour les attaques computationnellement coûteuses.
+
+**Note sur le papier Awad et al.** : le papier ne précise pas la méthodologie exacte d'application de JSMA sur leur dataset. Notre limitation est probablement partagée par les auteurs (utilisation implicite d'échantillonnage ou d'une implémentation optimisée non publique).
+
+**3. Sauvegarde des résultats**
+
+ART ne fait pas de checkpointing pendant l'exécution de `attack.generate()`. Si le job SLURM est terminé avant complétion, les résultats intermédiaires sont perdus. Cette limitation empêche de "reprendre" une attaque partielle avec ART.
+
+Une solution alternative (implémentation custom avec checkpoints périodiques) serait envisageable mais dépasse le cadre de ce projet de reproduction.
+
 ---
 
 ## Structure du projet
