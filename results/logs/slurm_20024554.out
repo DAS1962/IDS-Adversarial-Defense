@@ -1,0 +1,181 @@
+=== Job SLURM demarre ===
+Date debut : Tue Aug 18 09:28:11 EDT 2026
+Node       : g6.nibi.sharcnet
+Job ID     : 20024554
+CPUs       : 8
+Memoire    : 32768 MB
+=========================
+
+=== GPU alloue ===
+name, memory.total [MiB], driver_version
+NVIDIA H100 80GB HBM3, 81559 MiB, 580.82.07
+
+Baseline DNN — CIC-IDS 2017
+Date : 2026-08-18 09:28:36
+
+Device utilisé : cuda
+GPU            : NVIDIA H100 80GB HBM3
+CUDA version   : 13.2
+
+Chargement des données...
+  X_train : (1943529, 58) (0.90 GB)
+  X_test  : (831864, 58)
+  y_train : 1,943,529 labels
+  y_test  : 831,864 labels
+  Classes : 15
+
+Création des DataLoaders...
+  Train : 15,184 batches de 128
+  Test  : 6,499 batches de 128
+
+Création du modèle...
+  Paramètres : 165,391
+
+Début de l'entraînement
+  Device            : cuda
+  Epochs            : 50
+  Learning rate init: 0.001
+  Scheduler         : ReduceLROnPlateau (factor=0.5, patience=5)
+  Batch size        : 128
+
+Epoch  1/50 | lr=0.001000 | train_loss=0.0898 train_acc=0.9657 | test_loss=0.0515 test_acc=0.9769 | time=23.9s
+           -> Nouveau meilleur modèle sauvegardé (0.9769)
+Epoch  2/50 | lr=0.001000 | train_loss=0.0595 train_acc=0.9746 | test_loss=0.0487 test_acc=0.9831 | time=23.3s
+           -> Nouveau meilleur modèle sauvegardé (0.9831)
+Epoch  3/50 | lr=0.001000 | train_loss=0.0508 train_acc=0.9796 | test_loss=0.0280 test_acc=0.9902 | time=23.3s
+           -> Nouveau meilleur modèle sauvegardé (0.9902)
+Epoch  4/50 | lr=0.001000 | train_loss=0.0421 train_acc=0.9839 | test_loss=0.0246 test_acc=0.9898 | time=23.2s
+Epoch  5/50 | lr=0.001000 | train_loss=0.0397 train_acc=0.9850 | test_loss=0.0250 test_acc=0.9911 | time=22.9s
+           -> Nouveau meilleur modèle sauvegardé (0.9911)
+Epoch  6/50 | lr=0.001000 | train_loss=0.0388 train_acc=0.9856 | test_loss=0.0251 test_acc=0.9907 | time=23.2s
+Epoch  7/50 | lr=0.001000 | train_loss=0.0367 train_acc=0.9860 | test_loss=0.0358 test_acc=0.9860 | time=23.3s
+Epoch  8/50 | lr=0.001000 | train_loss=0.0360 train_acc=0.9864 | test_loss=0.0300 test_acc=0.9893 | time=23.7s
+Epoch  9/50 | lr=0.001000 | train_loss=0.0370 train_acc=0.9864 | test_loss=0.0438 test_acc=0.9831 | time=23.5s
+Epoch 10/50 | lr=0.001000 | train_loss=0.0357 train_acc=0.9870 | test_loss=0.0282 test_acc=0.9907 | time=23.6s
+           -> Learning rate reduit : 0.001000 -> 0.000500
+Epoch 11/50 | lr=0.000500 | train_loss=0.0277 train_acc=0.9890 | test_loss=0.0214 test_acc=0.9947 | time=23.5s
+           -> Nouveau meilleur modèle sauvegardé (0.9947)
+Epoch 12/50 | lr=0.000500 | train_loss=0.0273 train_acc=0.9892 | test_loss=0.0204 test_acc=0.9929 | time=22.9s
+Epoch 13/50 | lr=0.000500 | train_loss=0.0273 train_acc=0.9892 | test_loss=0.0174 test_acc=0.9936 | time=22.9s
+Epoch 14/50 | lr=0.000500 | train_loss=0.0276 train_acc=0.9892 | test_loss=0.0203 test_acc=0.9929 | time=23.1s
+Epoch 15/50 | lr=0.000500 | train_loss=0.0271 train_acc=0.9894 | test_loss=0.0233 test_acc=0.9922 | time=23.4s
+Epoch 16/50 | lr=0.000500 | train_loss=0.0273 train_acc=0.9894 | test_loss=0.0318 test_acc=0.9929 | time=23.3s
+Epoch 17/50 | lr=0.000500 | train_loss=0.0271 train_acc=0.9895 | test_loss=0.0297 test_acc=0.9924 | time=23.5s
+Epoch 18/50 | lr=0.000500 | train_loss=0.0270 train_acc=0.9896 | test_loss=0.0361 test_acc=0.9932 | time=23.5s
+Epoch 19/50 | lr=0.000500 | train_loss=0.0265 train_acc=0.9897 | test_loss=0.0337 test_acc=0.9934 | time=23.0s
+           -> Learning rate reduit : 0.000500 -> 0.000250
+Epoch 20/50 | lr=0.000250 | train_loss=0.0238 train_acc=0.9905 | test_loss=0.0301 test_acc=0.9938 | time=23.2s
+Epoch 21/50 | lr=0.000250 | train_loss=0.0234 train_acc=0.9906 | test_loss=0.0293 test_acc=0.9941 | time=23.8s
+Epoch 22/50 | lr=0.000250 | train_loss=0.0232 train_acc=0.9907 | test_loss=0.0260 test_acc=0.9941 | time=23.4s
+Epoch 23/50 | lr=0.000250 | train_loss=0.0231 train_acc=0.9908 | test_loss=0.0292 test_acc=0.9937 | time=23.8s
+Epoch 24/50 | lr=0.000250 | train_loss=0.0233 train_acc=0.9908 | test_loss=0.0318 test_acc=0.9936 | time=23.7s
+Epoch 25/50 | lr=0.000250 | train_loss=0.0228 train_acc=0.9910 | test_loss=0.0267 test_acc=0.9942 | time=23.4s
+           -> Learning rate reduit : 0.000250 -> 0.000125
+Epoch 26/50 | lr=0.000125 | train_loss=0.0210 train_acc=0.9917 | test_loss=0.0253 test_acc=0.9941 | time=22.9s
+Epoch 27/50 | lr=0.000125 | train_loss=0.0207 train_acc=0.9918 | test_loss=0.0232 test_acc=0.9951 | time=23.1s
+           -> Nouveau meilleur modèle sauvegardé (0.9951)
+Epoch 28/50 | lr=0.000125 | train_loss=0.0205 train_acc=0.9919 | test_loss=0.0220 test_acc=0.9949 | time=23.3s
+Epoch 29/50 | lr=0.000125 | train_loss=0.0203 train_acc=0.9920 | test_loss=0.0179 test_acc=0.9958 | time=23.0s
+           -> Nouveau meilleur modèle sauvegardé (0.9958)
+Epoch 30/50 | lr=0.000125 | train_loss=0.0201 train_acc=0.9921 | test_loss=0.0155 test_acc=0.9960 | time=23.1s
+           -> Nouveau meilleur modèle sauvegardé (0.9960)
+Epoch 31/50 | lr=0.000125 | train_loss=0.0198 train_acc=0.9922 | test_loss=0.0183 test_acc=0.9945 | time=22.7s
+Epoch 32/50 | lr=0.000125 | train_loss=0.0197 train_acc=0.9923 | test_loss=0.0174 test_acc=0.9956 | time=23.2s
+Epoch 33/50 | lr=0.000125 | train_loss=0.0194 train_acc=0.9924 | test_loss=0.0167 test_acc=0.9955 | time=23.1s
+Epoch 34/50 | lr=0.000125 | train_loss=0.0192 train_acc=0.9925 | test_loss=0.0188 test_acc=0.9968 | time=23.3s
+           -> Nouveau meilleur modèle sauvegardé (0.9968)
+Epoch 35/50 | lr=0.000125 | train_loss=0.0191 train_acc=0.9927 | test_loss=0.0194 test_acc=0.9962 | time=23.2s
+Epoch 36/50 | lr=0.000125 | train_loss=0.0187 train_acc=0.9928 | test_loss=0.0181 test_acc=0.9961 | time=23.3s
+           -> Learning rate reduit : 0.000125 -> 0.000063
+Epoch 37/50 | lr=0.000063 | train_loss=0.0175 train_acc=0.9933 | test_loss=0.0171 test_acc=0.9959 | time=22.6s
+Epoch 38/50 | lr=0.000063 | train_loss=0.0173 train_acc=0.9934 | test_loss=0.0164 test_acc=0.9967 | time=23.9s
+Epoch 39/50 | lr=0.000063 | train_loss=0.0171 train_acc=0.9935 | test_loss=0.0186 test_acc=0.9954 | time=23.4s
+Epoch 40/50 | lr=0.000063 | train_loss=0.0169 train_acc=0.9936 | test_loss=0.0160 test_acc=0.9968 | time=23.2s
+Epoch 41/50 | lr=0.000063 | train_loss=0.0168 train_acc=0.9936 | test_loss=0.0164 test_acc=0.9966 | time=23.3s
+Epoch 42/50 | lr=0.000063 | train_loss=0.0166 train_acc=0.9937 | test_loss=0.0172 test_acc=0.9965 | time=23.0s
+           -> Learning rate reduit : 0.000063 -> 0.000031
+Epoch 43/50 | lr=0.000031 | train_loss=0.0160 train_acc=0.9940 | test_loss=0.0173 test_acc=0.9965 | time=23.9s
+Epoch 44/50 | lr=0.000031 | train_loss=0.0159 train_acc=0.9940 | test_loss=0.0165 test_acc=0.9966 | time=23.1s
+Epoch 45/50 | lr=0.000031 | train_loss=0.0158 train_acc=0.9940 | test_loss=0.0174 test_acc=0.9965 | time=23.0s
+Epoch 46/50 | lr=0.000031 | train_loss=0.0157 train_acc=0.9941 | test_loss=0.0159 test_acc=0.9969 | time=24.3s
+           -> Nouveau meilleur modèle sauvegardé (0.9969)
+Epoch 47/50 | lr=0.000031 | train_loss=0.0156 train_acc=0.9941 | test_loss=0.0155 test_acc=0.9969 | time=23.3s
+           -> Nouveau meilleur modèle sauvegardé (0.9969)
+Epoch 48/50 | lr=0.000031 | train_loss=0.0155 train_acc=0.9942 | test_loss=0.0154 test_acc=0.9969 | time=23.4s
+Epoch 49/50 | lr=0.000031 | train_loss=0.0154 train_acc=0.9942 | test_loss=0.0154 test_acc=0.9969 | time=23.6s
+           -> Nouveau meilleur modèle sauvegardé (0.9969)
+Epoch 50/50 | lr=0.000031 | train_loss=0.0153 train_acc=0.9942 | test_loss=0.0159 test_acc=0.9969 | time=23.6s
+
+Meilleur modèle : epoch 49, test_acc = 0.9969
+
+Chargement du meilleur modèle pour évaluation finale...
+  Meilleur epoch : 49
+  Test accuracy  : 0.9969
+  Learning rate  : 0.000031
+
+Évaluation finale sur le test set
+
+Accuracy globale : 0.9969
+F1 macro         : 0.8017
+F1 weighted      : 0.9972
+
+Rapport par classe :
+                            precision    recall  f1-score   support
+
+                    BENIGN     0.9993    0.9974    0.9984    691369
+                       Bot     0.3601    0.9487    0.5220       643
+                      DDoS     0.9995    0.9996    0.9995     42245
+             DoS GoldenEye     0.9911    0.9859    0.9885      3395
+                  DoS Hulk     0.9986    0.9938    0.9962     57039
+          DoS Slowhttptest     0.9157    0.9948    0.9536      1725
+             DoS slowloris     0.9888    0.9910    0.9899      1777
+               FTP-Patator     0.9985    0.9959    0.9972      1957
+                Heartbleed     1.0000    0.7500    0.8571         4
+              Infiltration     0.7500    0.7500    0.7500        12
+                  PortScan     0.9893    0.9990    0.9941     29929
+               SSH-Patator     0.9021    0.9896    0.9439      1062
+  Web Attack � Brute Force     0.6803    0.9608    0.7966       485
+Web Attack � Sql Injection     0.1429    0.1429    0.1429         7
+          Web Attack � XSS     0.7333    0.0512    0.0957       215
+
+                  accuracy                         0.9969    831864
+                 macro avg     0.8300    0.8367    0.8017    831864
+              weighted avg     0.9978    0.9969    0.9972    831864
+
+
+Matrice de confusion (lignes=vrai, colonnes=prédit) :
+[[689592   1084     20     25     56    144     15      3      0      3
+     324     86     10      3      4]
+ [    33    610      0      0      0      0      0      0      0      0
+       0      0      0      0      0]
+ [    18      0  42226      1      0      0      0      0      0      0
+       0      0      0      0      0]
+ [    38      0      0   3347      1      9      0      0      0      0
+       0      0      0      0      0]
+ [   350      0      0      0  56686      0      0      0      0      0
+       0      1      0      2      0]
+ [     2      0      0      1      0   1716      5      0      0      0
+       0      0      1      0      0]
+ [     7      0      0      2      0      5   1761      0      0      0
+       0      1      1      0      0]
+ [     1      0      0      0      0      0      0   1949      0      0
+       0      6      1      0      0]
+ [     1      0      0      0      0      0      0      0      3      0
+       0      0      0      0      0]
+ [     3      0      0      0      0      0      0      0      0      9
+       0      0      0      0      0]
+ [    10      0      0      0     16      0      0      0      0      0
+   29898      1      4      0      0]
+ [     6      0      0      0      4      0      0      0      0      0
+       0   1051      0      1      0]
+ [     4      0      0      0      0      0      0      0      0      0
+       0     15    466      0      0]
+ [     1      0      0      1      0      0      0      0      0      0
+       0      3      1      1      0]
+ [     2      0      0      0      0      0      0      0      0      0
+       0      1    201      0     11]]
+Historique sauvegardé : results/logs/baseline_training_20260818_094818.pkl
+
+Baseline DNN terminé
+
+=== Job termine a : Tue Aug 18 09:48:19 EDT 2026 ===

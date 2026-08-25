@@ -1,0 +1,84 @@
+Sélection de features - Random Forest
+Date : 2026-08-11 13:09:40.221431
+Features gardées : 58 / 78
+Méthode : Random Forest sur dataset complet (fidèle au papier)
+
+Importance de toutes les features (triée) :
+    1. [GARDEE] Packet Length Variance                   0.061822
+    2. [GARDEE] Packet Length Std                        0.059849
+    3. [GARDEE] Avg Bwd Segment Size                     0.056513
+    4. [GARDEE] Max Packet Length                        0.049103
+    5. [GARDEE] Bwd Packet Length Max                    0.042241
+    6. [GARDEE] Bwd Packet Length Std                    0.040495
+    7. [GARDEE] Average Packet Size                      0.039732
+    8. [GARDEE] Total Length of Bwd Packets              0.037902
+    9. [GARDEE] Fwd Packet Length Max                    0.034238
+   10. [GARDEE] Total Length of Fwd Packets              0.033276
+   11. [GARDEE] Subflow Fwd Bytes                        0.028340
+   12. [GARDEE] Subflow Bwd Bytes                        0.026892
+   13. [GARDEE] Avg Fwd Segment Size                     0.026289
+   14. [GARDEE] Bwd Packet Length Mean                   0.023355
+   15. [GARDEE] Subflow Fwd Packets                      0.018798
+   16. [GARDEE] Packet Length Mean                       0.018507
+   17. [GARDEE] Destination Port                         0.018459
+   18. [GARDEE] Fwd Header Length.1                      0.017755
+   19. [GARDEE] Fwd IAT Max                              0.017752
+   20. [GARDEE] Fwd Packet Length Mean                   0.017588
+   21. [GARDEE] Total Fwd Packets                        0.017375
+   22. [GARDEE] Fwd IAT Std                              0.016424
+   23. [GARDEE] Flow IAT Std                             0.015257
+   24. [GARDEE] Idle Mean                                0.014747
+   25. [GARDEE] Fwd Header Length                        0.014508
+   26. [GARDEE] PSH Flag Count                           0.014256
+   27. [GARDEE] Init_Win_bytes_backward                  0.013828
+   28. [GARDEE] Fwd IAT Mean                             0.012901
+   29. [GARDEE] Fwd Packet Length Std                    0.012507
+   30. [GARDEE] act_data_pkt_fwd                         0.012073
+   31. [GARDEE] Flow Bytes/s                             0.011974
+   32. [GARDEE] Flow IAT Mean                            0.011598
+   33. [GARDEE] Init_Win_bytes_forward                   0.011420
+   34. [GARDEE] Bwd Header Length                        0.011361
+   35. [GARDEE] Fwd IAT Total                            0.010911
+   36. [GARDEE] Bwd Packets/s                            0.010049
+   37. [GARDEE] Idle Min                                 0.009799
+   38. [GARDEE] min_seg_size_forward                     0.009678
+   39. [GARDEE] Flow Packets/s                           0.009372
+   40. [GARDEE] Flow IAT Max                             0.009181
+   41. [GARDEE] Subflow Bwd Packets                      0.008958
+   42. [GARDEE] ACK Flag Count                           0.007926
+   43. [GARDEE] Total Backward Packets                   0.007852
+   44. [GARDEE] Flow Duration                            0.006621
+   45. [GARDEE] Fwd Packets/s                            0.005463
+   46. [GARDEE] Fwd IAT Min                              0.005223
+   47. [GARDEE] Min Packet Length                        0.004120
+   48. [GARDEE] Idle Max                                 0.003988
+   49. [GARDEE] Bwd Packet Length Min                    0.003136
+   50. [GARDEE] Bwd IAT Max                              0.003040
+   51. [GARDEE] Bwd IAT Mean                             0.002907
+   52. [GARDEE] Bwd IAT Total                            0.002901
+   53. [GARDEE] Flow IAT Min                             0.002608
+   54. [GARDEE] Bwd IAT Std                              0.002283
+   55. [GARDEE] Fwd Packet Length Min                    0.002237
+   56. [GARDEE] Bwd IAT Min                              0.002037
+   57. [GARDEE] Active Mean                              0.002036
+   58. [GARDEE] Active Min                               0.001894
+   59. [REJETEE] Active Max                               0.001617
+   60. [REJETEE] FIN Flag Count                           0.001576
+   61. [REJETEE] URG Flag Count                           0.001101
+   62. [REJETEE] Down/Up Ratio                            0.000748
+   63. [REJETEE] Active Std                               0.000532
+   64. [REJETEE] SYN Flag Count                           0.000452
+   65. [REJETEE] Fwd PSH Flags                            0.000341
+   66. [REJETEE] Idle Std                                 0.000273
+   67. [REJETEE] CWE Flag Count                           0.000002
+   68. [REJETEE] Fwd URG Flags                            0.000001
+   69. [REJETEE] ECE Flag Count                           0.000000
+   70. [REJETEE] RST Flag Count                           0.000000
+   71. [REJETEE] Bwd URG Flags                            0.000000
+   72. [REJETEE] Bwd PSH Flags                            0.000000
+   73. [REJETEE] Bwd Avg Bulk Rate                        0.000000
+   74. [REJETEE] Bwd Avg Packets/Bulk                     0.000000
+   75. [REJETEE] Fwd Avg Packets/Bulk                     0.000000
+   76. [REJETEE] Fwd Avg Bytes/Bulk                       0.000000
+   77. [REJETEE] Bwd Avg Bytes/Bulk                       0.000000
+   78. [REJETEE] Fwd Avg Bulk Rate                        0.000000

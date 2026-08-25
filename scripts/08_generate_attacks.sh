@@ -1,4 +1,3 @@
-
 #!/bin/bash
 #SBATCH --job-name=generate_attacks
 #SBATCH --account=def-smoolak
@@ -6,7 +5,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:h100:1
-#SBATCH --time=12:00:00
+#SBATCH --time=7-00:00:00
 #SBATCH --output=results/logs/slurm_%j.out
 #SBATCH --error=results/logs/slurm_%j.err
 

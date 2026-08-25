@@ -27,8 +27,7 @@ data/processed/
 *.pt
 *.h5
 *.ckpt
-results/checkpoints/
-results/logs/
+
 !results/figures/final_*
 
 # ================================

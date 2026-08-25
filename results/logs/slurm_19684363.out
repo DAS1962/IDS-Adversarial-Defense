@@ -1,0 +1,81 @@
+=== Job SLURM demarre ===
+Date debut : Wed Aug 12 13:12:38 EDT 2026
+Node       : c208.nibi.sharcnet
+Job ID     : 19684363
+CPUs       : 16
+Memoire    : 65536 MB
+=========================
+
+============================================================
+Split train/test + Normalisation + SMOTE
+Date : 2026-08-12 13:12:49
+============================================================
+
+Chargement du dataset selectionne...
+  Shape : 2,520,798 lignes x 59 colonnes
+
+Split train/test (67/33, stratifie)...
+  Train : 1,688,934 lignes (67.0%)
+  Test  : 831,864 lignes (33.0%)
+
+  Classes dans train : 15
+  Classes dans test  : 15
+
+Normalisation des features (StandardScaler)...
+  Fit sur train, transform sur train ET test
+  Train apres scaling : mean~-0.0000, std~1.0000
+  Test  apres scaling : mean~-0.0001, std~1.1645
+
+Application de SMOTE sur le train...
+  Distribution AVANT SMOTE :
+    Classe  0 :  1,403,688
+    Classe  1 :      1,305
+    Classe  2 :     85,769
+    Classe  3 :      6,891
+    Classe  4 :    115,807
+    Classe  5 :      3,503
+    Classe  6 :      3,608
+    Classe  7 :      3,974
+    Classe  8 :          7
+    Classe  9 :         24
+    Classe 10 :     60,765
+    Classe 11 :      2,157
+    Classe 12 :        985
+    Classe 13 :         14
+    Classe 14 :        437
+    Total       :  1,688,934
+
+  Distribution APRES SMOTE :
+    Classe  0 :  1,403,688
+    Classe  1 :  1,403,688
+    Classe  2 :  1,403,688
+    Classe  3 :  1,403,688
+    Classe  4 :  1,403,688
+    Classe  5 :  1,403,688
+    Classe  6 :  1,403,688
+    Classe  7 :  1,403,688
+    Classe  8 :  1,403,688
+    Classe  9 :  1,403,688
+    Classe 10 :  1,403,688
+    Classe 11 :  1,403,688
+    Classe 12 :  1,403,688
+    Classe 13 :  1,403,688
+    Classe 14 :  1,403,688
+    Total       : 21,055,320
+
+  Exemples synthetiques ajoutes : 19,366,386
+
+Sauvegarde des artefacts...
+  X_train.pkl          :  9317.1 MB
+  X_test.pkl           :   374.5 MB
+  y_train.pkl          :   160.6 MB
+  y_test.pkl           :    19.0 MB
+  scaler.pkl           : 3.3 KB
+
+============================================================
+Preparation des donnees terminee
+Train final : 21,055,320 lignes x 58 features
+Test final  : 831,864 lignes x 58 features
+============================================================
+
+=== Job termine a : Wed Aug 12 13:13:36 EDT 2026 ===

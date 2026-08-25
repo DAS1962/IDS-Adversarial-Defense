@@ -1,0 +1,25 @@
+Exploration du dataset CIC-IDS 2017
+Date : 2026-08-06 10:33:51.422314
+
+Nombre de fichiers CSV : 8
+Nombre total de lignes : 2,830,743
+Nombre de colonnes : 79
+Nombre de classes : 15
+Ratio de deséquilibre : 206,645 pour 1
+
+Distribution des classes :
+  BENIGN : 2,273,097 (80.300%)
+  DoS Hulk : 231,073 (8.163%)
+  PortScan : 158,930 (5.614%)
+  DDoS : 128,027 (4.523%)
+  DoS GoldenEye : 10,293 (0.364%)
+  FTP-Patator : 7,938 (0.280%)
+  SSH-Patator : 5,897 (0.208%)
+  DoS slowloris : 5,796 (0.205%)
+  DoS Slowhttptest : 5,499 (0.194%)
+  Bot : 1,966 (0.069%)
+  Web Attack � Brute Force : 1,507 (0.053%)
+  Web Attack � XSS : 652 (0.023%)
+  Infiltration : 36 (0.001%)
+  Web Attack � Sql Injection : 21 (0.001%)
+  Heartbleed : 11 (0.000%)

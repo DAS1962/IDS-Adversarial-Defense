@@ -59,7 +59,7 @@ INPUT_DIM = 58
 RANDOM_STATE = 42
 
 # Taille de l'échantillon pour JSMA
-JSMA_SAMPLE_SIZE = 50_000
+JSMA_SAMPLE_SIZE = 30_000
 
 ATTACK_CONFIGS = {
     "JSMA": {"theta": 0.1, "gamma": 1.0},
