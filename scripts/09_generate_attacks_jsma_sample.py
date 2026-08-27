@@ -1,47 +1,43 @@
-
 """
-Génération JSMA (échantillon 50k) et C&W (full test set).
+Génération JSMA (échantillon stratifié) et C&W (full test set).
 
-Ce script est complémentaire à 08_generate_attacks.py. Il génère :
-  - JSMA sur un échantillon stratifié de 50 000 exemples (pratique)
-  - C&W sur le test set complet (temps raisonnable ~1h)
+Complémentaire à 08_generate_attacks.py. Génère :
+  - JSMA sur un échantillon stratifié (30 000 exemples par défaut)
+  - C&W sur le test set complet
 
-Rationale :
-  - JSMA sur 831k échantillons prend ~12 jours (mesuré empiriquement)
-  - JSMA sur 50k est représentatif et prend ~2-3h
-  - C&W sur full set est faisable (~30-60 min)
-
-Les résultats sont sauvegardés avec des noms distincts pour ne pas écraser
-un éventuel job JSMA full en cours d'exécution parallèle.
+Attaques configurées en mode untargeted (y=None) : le but est de faire
+prédire n'importe quelle classe incorrecte au modèle, pas une classe cible
+précise. Passer les vrais labels rendrait l'attaque triviale puisque le
+modèle prédit déjà ces classes correctement.
 
 Note technique : patch np.product pour compatibilité NumPy 2.x avec ART 1.18.
 """
 
 import sys
 import time
+from datetime import datetime
+from pathlib import Path
+
 import joblib
 import numpy as np
 
-# Patch pour compatibilité ART 1.18 avec NumPy 2.x
-if not hasattr(np, 'product'):
+if not hasattr(np, "product"):
     np.product = np.prod
 
 import pandas as pd
 import torch
 import torch.nn as nn
-from pathlib import Path
-from datetime import datetime
 from sklearn.metrics import (
     accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
     classification_report,
     confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
 )
 from sklearn.model_selection import train_test_split
 
-from art.attacks.evasion import SaliencyMapMethod, CarliniL2Method
+from art.attacks.evasion import CarliniL2Method, SaliencyMapMethod
 from art.estimators.classification import PyTorchClassifier
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -57,18 +53,15 @@ BATCH_SIZE = 512
 NUM_CLASSES = 15
 INPUT_DIM = 58
 RANDOM_STATE = 42
-
-# Taille de l'échantillon pour JSMA
 JSMA_SAMPLE_SIZE = 30_000
 
 ATTACK_CONFIGS = {
-    "JSMA": {"theta": 0.1, "gamma": 1.0},
-    "CW": {"max_iter": 9},
+    "JSMA": {"theta": 0.3, "gamma": 0.15},
+    "CW": {"max_iter": 10, "confidence": 0.0},
 }
 
 
 def load_baseline_model(device):
-    """Charge le baseline v4."""
     print("Chargement du baseline v4...")
     model = BaselineDNN(input_dim=INPUT_DIM, hidden1=512, hidden2=256, output_dim=NUM_CLASSES)
     checkpoint = torch.load(
@@ -79,34 +72,28 @@ def load_baseline_model(device):
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
     model.eval()
-
     print(f"  Meilleur epoch : {checkpoint['epoch']}")
     print(f"  Test accuracy  : {checkpoint['test_acc']:.4f}\n")
     return model
 
 
 def load_test_data():
-    """Charge X_test et y_test."""
     print("Chargement du test set...")
     X_test = pd.read_pickle(DATA_DIR / "X_test.pkl")
     y_test = pd.read_pickle(DATA_DIR / "y_test.pkl")
-
     if isinstance(X_test, pd.DataFrame):
         X_test = X_test.values.astype(np.float32)
     if isinstance(y_test, pd.Series):
         y_test = y_test.values
-
     print(f"  X_test : {X_test.shape}")
     print(f"  y_test : {len(y_test):,} labels\n")
     return X_test, y_test
 
 
 def create_art_classifier(model, device):
-    """Wrappe le modèle PyTorch pour ART."""
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-    art_classifier = PyTorchClassifier(
+    return PyTorchClassifier(
         model=model,
         loss=criterion,
         optimizer=optimizer,
@@ -114,55 +101,46 @@ def create_art_classifier(model, device):
         nb_classes=NUM_CLASSES,
         device_type="gpu" if device.type == "cuda" else "cpu",
     )
-    return art_classifier
 
 
 def create_stratified_sample(X, y, sample_size, random_state):
-    """Crée un échantillon stratifié pour JSMA."""
     print(f"Création d'un échantillon stratifié de {sample_size:,} exemples...")
-
     _, X_sample, _, y_sample = train_test_split(
         X, y,
         test_size=sample_size,
         stratify=y,
         random_state=random_state,
     )
-
     print(f"  Échantillon : {len(X_sample):,} lignes")
     print(f"  Classes présentes : {len(np.unique(y_sample))}\n")
-
-    # Verifier la distribution
     print("  Distribution par classe dans l'echantillon :")
     unique, counts = np.unique(y_sample, return_counts=True)
     for cls, count in zip(unique, counts):
         pct = 100 * count / len(y_sample)
         print(f"    Classe {cls:2d} : {count:>6,} ({pct:.2f}%)")
     print()
-
     return X_sample.astype(np.float32), y_sample
 
 
 def generate_art_attack(attack, X, y, name):
-    """Génère les adversariaux avec ART."""
+    """Génère les adversariaux. y=None pour attaque untargeted."""
     print(f"Génération {name}...")
     debut = time.time()
-
     X_np = X.astype(np.float32)
-    X_adv = attack.generate(x=X_np, y=y)
-
+    if y is None:
+        X_adv = attack.generate(x=X_np)
+    else:
+        X_adv = attack.generate(x=X_np, y=y)
     duree = time.time() - debut
     print(f"  {name} termine en {duree:.1f}s ({duree/60:.1f} min)\n")
     return X_adv
 
 
 def evaluate_attack(model, X_adv, y_true, device, name):
-    """Évalue le baseline sur les X_adv."""
     print(f"Évaluation sur {name}...")
     model.eval()
-
     n_samples = len(X_adv)
     predictions = np.zeros(n_samples, dtype=np.int64)
-
     with torch.no_grad():
         for i in range(0, n_samples, BATCH_SIZE):
             end = min(i + BATCH_SIZE, n_samples)
@@ -188,17 +166,19 @@ def evaluate_attack(model, X_adv, y_true, device, name):
     print(f"  F1 (weighted)          : {f1_weighted:.4f}")
 
     label_encoder = joblib.load(DATA_DIR / "label_encoder.pkl")
+    all_labels = list(range(NUM_CLASSES))
     target_names = [str(c) for c in label_encoder.classes_]
 
     print(f"\n  Rapport par classe pour {name} :")
     print(classification_report(
         y_true, predictions,
+        labels=all_labels,
         target_names=target_names,
         digits=4,
         zero_division=0,
     ))
 
-    cm = confusion_matrix(y_true, predictions)
+    cm = confusion_matrix(y_true, predictions, labels=all_labels)
 
     return {
         "attack": name,
@@ -215,7 +195,7 @@ def evaluate_attack(model, X_adv, y_true, device, name):
 
 
 def main():
-    print("Génération JSMA (échantillon 50k) et C&W (full test set)")
+    print("Génération JSMA (échantillon) et C&W (full test set)")
     print(f"Date : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     torch.manual_seed(RANDOM_STATE)
@@ -231,12 +211,10 @@ def main():
     art_classifier = create_art_classifier(model, device)
 
     all_results = []
+    ATTACKS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # -----------------------------------------
-    # 1. JSMA sur echantillon stratifie 50k
-    # -----------------------------------------
     print("=" * 70)
-    print("Partie 1 : JSMA sur echantillon stratifie 50 000")
+    print(f"Partie 1 : JSMA sur échantillon stratifié {JSMA_SAMPLE_SIZE:,}")
     print("=" * 70 + "\n")
 
     X_jsma_sample, y_jsma_sample = create_stratified_sample(
@@ -249,22 +227,17 @@ def main():
         gamma=ATTACK_CONFIGS["JSMA"]["gamma"],
         batch_size=BATCH_SIZE,
     )
-    X_adv_jsma = generate_art_attack(attack, X_jsma_sample, y_jsma_sample, "JSMA (50k)")
+    X_adv_jsma = generate_art_attack(attack, X_jsma_sample, None, "JSMA")
 
-    # Sauvegarder avec des noms distincts pour ne pas ecraser le job 1
-    ATTACKS_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump(X_adv_jsma, ATTACKS_DIR / "X_adv_jsma_sample50k.pkl")
-    joblib.dump(y_jsma_sample, ATTACKS_DIR / "y_jsma_sample50k.pkl")
-    print(f"  Sauvegarde : X_adv_jsma_sample50k.pkl")
-    print(f"  Sauvegarde : y_jsma_sample50k.pkl\n")
+    joblib.dump(X_adv_jsma, ATTACKS_DIR / "X_adv_jsma_sample30k.pkl")
+    joblib.dump(y_jsma_sample, ATTACKS_DIR / "y_jsma_sample30k.pkl")
+    print(f"  Sauvegarde : X_adv_jsma_sample30k.pkl")
+    print(f"  Sauvegarde : y_jsma_sample30k.pkl\n")
 
-    result = evaluate_attack(model, X_adv_jsma, y_jsma_sample, device, "JSMA (50k sample)")
+    result = evaluate_attack(model, X_adv_jsma, y_jsma_sample, device, "JSMA (30k sample)")
     all_results.append(result)
     del X_adv_jsma
 
-    # -----------------------------------------
-    # 2. C&W sur full test set
-    # -----------------------------------------
     print("=" * 70)
     print("Partie 2 : C&W sur test set complet")
     print("=" * 70 + "\n")
@@ -272,9 +245,10 @@ def main():
     attack = CarliniL2Method(
         classifier=art_classifier,
         max_iter=ATTACK_CONFIGS["CW"]["max_iter"],
+        confidence=ATTACK_CONFIGS["CW"]["confidence"],
         batch_size=BATCH_SIZE,
     )
-    X_adv_cw = generate_art_attack(attack, X_test, y_test, "C&W")
+    X_adv_cw = generate_art_attack(attack, X_test, None, "C&W")
     joblib.dump(X_adv_cw, ATTACKS_DIR / "X_adv_cw.pkl")
     taille_mb = (ATTACKS_DIR / "X_adv_cw.pkl").stat().st_size / (1024 * 1024)
     print(f"  Sauvegarde : X_adv_cw.pkl ({taille_mb:.1f} MB)\n")
@@ -283,10 +257,8 @@ def main():
     all_results.append(result)
     del X_adv_cw
 
-    # Sauvegarde des metriques
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
     joblib.dump(
         {
             "results": all_results,
@@ -296,7 +268,6 @@ def main():
         LOG_DIR / f"jsma_cw_results_{timestamp}.pkl",
     )
     print(f"\nRésultats sauvegardés : {LOG_DIR / f'jsma_cw_results_{timestamp}.pkl'}")
-
     print("\nGénération terminée")
 
 
