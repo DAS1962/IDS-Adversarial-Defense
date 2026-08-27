@@ -1,3 +1,0 @@
-[Parallel(n_jobs=-1)]: Using backend ThreadingBackend with 16 concurrent workers.
-[Parallel(n_jobs=-1)]: Done   9 tasks      | elapsed:    8.3s
-[Parallel(n_jobs=-1)]: Done 100 out of 100 | elapsed:   51.5s finished
