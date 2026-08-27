@@ -40,9 +40,9 @@ Le projet suit les 9 étapes du framework proposé par Awad et al. (2025) :
 | 3 | Feature selection | Terminée |
 | 4 | Split train/test + Normalisation + SMOTE | Terminée |
 | 5 | Baseline DNN | Terminée |
-| 6 | Attaques adversariales | À faire |
-| 7 | Test de vulnérabilité | À faire |
-| 8 | Mécanismes de défense | À faire |
+| 6 | Attaques adversariales | En cours (FGSM, BIM, PGD, DeepFool terminées ; JSMA 20k + C&W en cours) |
+| 7 | Test de vulnérabilité | Partiel (couvert par étape 6) |
+| 8 | Mécanismes de défense | En cours (Label Smoothing en préparation) |
 | 9 | Agrégation par ensemble | À faire |
 
 ---
@@ -223,42 +223,23 @@ Reproduction et amélioration itérative du DNN baseline décrit dans le papier.
 
 #### Itérations et raisonnement méthodologique
 
-Trois versions successives du baseline ont été entraînées pour identifier la configuration optimale.
+Quatre versions successives du baseline ont été entraînées pour identifier la configuration optimale.
 
 **Version 1 — Fidèle au papier (lr=0.01 fixe, 30 epochs)** :
+- Accuracy : 90.69%, F1 macro : 47.13%
+- Problème : instabilité, pic à epoch 2 puis dégradation
 
-Reproduction stricte des hyperparamètres du papier :
-- **Accuracy : 90.69%** (papier : 98.11%)
-- **F1 macro : 47.13%**
-- **F1 weighted : 93.98%**
+**Version 2 — Scheduler agressif (lr=0.01, factor=0.1, patience=2)** :
+- Accuracy : 95.59%, F1 macro : 44.66%
+- Problème : lr descend jusqu'à 0.000000
 
-**Problème identifié** : instabilité de l'entraînement. Le modèle atteint son pic à l'epoch 2 (90.69%) puis se dégrade progressivement jusqu'à 68% à l'epoch 30. Le lr=0.01 est trop élevé pour un dataset de 21M lignes (5M itérations d'optimizer), causant une divergence des poids.
-
-**Version 2 — Ajout d'un scheduler agressif (lr=0.01 initial, factor=0.1, patience=2, 30 epochs)** :
-
-Introduction du ReduceLROnPlateau pour stabiliser l'entraînement.
-- **Accuracy : 95.59%** (+4.90 points)
-- **F1 macro : 44.66%** (légèrement moins bon car modèle plus conservateur)
-- **F1 weighted : 97.05%**
-
-**Problème identifié** : le scheduler trop agressif descend le lr jusqu'à 0.000000 (littéralement zéro) à partir de l'epoch 17. Le modèle est bloqué sans plus pouvoir apprendre.
-
-**Version 3 — SMOTE custom + scheduler ajusté (lr=0.001 initial, factor=0.5, patience=5, min_lr=1e-5, 30 epochs)** :
-
-Deux améliorations combinées : nouvelle stratégie SMOTE et scheduler moins agressif.
-- **Accuracy : 99.60%** (+4.01 points, dépasse le papier)
-- **F1 macro : 78.15%** (grosse amélioration sur classes rares)
-- **F1 weighted : 99.65%**
-- Durée : 12 minutes (vs 1h40 en v1/v2)
+**Version 3 — SMOTE custom + scheduler ajusté (lr=0.001, factor=0.5, patience=5)** :
+- Accuracy : 99.60%, F1 macro : 78.15%
+- Durée réduite à 12 minutes
 
 **Version 4 (finale) — Extension à 50 epochs** :
-
-Après analyse de la courbe, le modèle n'avait pas encore convergé à l'epoch 30. Extension à 50 epochs pour identifier la vraie convergence.
-- **Accuracy : 99.69%** (+0.09 points)
-- **F1 macro : 80.17%** (+2.02 points, meilleure généralisation)
-- **F1 weighted : 99.72%**
-- Meilleur epoch : 49
-- Convergence confirmée par stagnation sur les 5 dernières epochs
+- Accuracy : 99.69%, F1 macro : 80.17%, F1 weighted : 99.72%
+- Convergence confirmée
 
 #### Résultats finaux (baseline v4)
 
@@ -290,27 +271,21 @@ Après analyse de la courbe, le modèle n'avait pas encore convergé à l'epoch 
 | Web Attack XSS | 73.33% | 5.12% | 9.57% | 215 |
 | Web Attack SQL Injection | 14.29% | 14.29% | 14.29% | 7 |
 
-**Interprétation** :
-- Les grandes classes (BENIGN, DDoS, DoS Hulk, PortScan) atteignent > 99% F1
-- Les classes intermédiaires (Bot, Web Attack Brute Force) sont raisonnablement bien classées
-- **Web Attack XSS** : precision haute (73%) mais recall très bas (5%) — le modèle est très conservateur pour cette classe
-- **Web Attack SQL** et **Heartbleed** : classes fondamentalement limitées par le nombre d'exemples réels dans le dataset (7 et 4 respectivement)
-
-#### Notes méthodologiques importantes
+**Notes méthodologiques importantes** :
 
 1. **Écart avec le papier** : nous obtenons 99.69% contre 98.11% pour le papier. Cet écart favorable (+1.58 points) s'explique probablement par la stratégie SMOTE custom qui réduit le bruit d'interpolation, et par l'extension à 50 epochs.
 
 2. **Le F1 macro reste bas (80%) malgré la haute accuracy** : cela révèle que certaines classes ultra-rares (Web Attack XSS, Web Attack SQL) restent difficiles à apprendre correctement. Le papier ne détaille pas de F1 macro, ce qui empêche la comparaison directe.
 
-3. **Learning rate initial** : passé de 0.01 (papier) à 0.001 après analyse des courbes de la v1 qui montraient une instabilité claire. Le papier ne mentionne pas de scheduler, ce qui suggère qu'ils ont soit implicitement gardé le meilleur modèle (comportement observé en v1), soit utilisé un dataset plus petit sans SMOTE massif.
+3. **Learning rate initial** : passé de 0.01 (papier) à 0.001 après analyse des courbes de la v1 qui montraient une instabilité claire.
 
 4. **Extension à 50 epochs** : décision méthodologique justifiée par l'observation que le modèle progressait encore à l'epoch 30. La convergence est prouvée par la stagnation de test_acc à 99.69% sur les 5 dernières epochs.
 
 ### Étape 6 — Génération des attaques adversariales
 
-Six attaques adversariales ont été implémentées et évaluées sur le baseline v4 :
+Six attaques adversariales implémentées et évaluées sur le baseline v4.
 
-**Résultats obtenus** (test complet, 831 864 échantillons) :
+#### Résultats obtenus (test complet, 831 864 échantillons)
 
 | Attaque | Accuracy | F1 macro | F1 weighted | Chute vs baseline |
 |---|---:|---:|---:|---|
@@ -319,16 +294,16 @@ Six attaques adversariales ont été implémentées et évaluées sur le baselin
 | BIM | 72.10% | 5.61% | 69.86% | -27.6 pts |
 | PGD | 78.48% | 5.86% | 73.09% | -21.2 pts |
 | DeepFool | 16.71% | 2.86% | 25.14% | **-82.9 pts** |
-| JSMA | En cours | — | — | — |
-| C&W | En attente | — | — | — |
+| JSMA | En cours (échantillon 20k) | — | — | — |
+| C&W | En cours (full test) | — | — | — |
 
 **Observations clés** :
 
-- **DeepFool** est l'attaque la plus dévastatrice (accuracy chute à 16.71%), cohérent avec la littérature
+- **DeepFool** est l'attaque la plus dévastatrice sur le test complet (accuracy chute à 16.71%)
 - Les attaques L∞ (FGSM, BIM, PGD) sont efficaces sur les classes minoritaires mais moins que sur les majoritaires
 - Le F1 macro chute drastiquement (~6% vs 80%) : les classes minoritaires sont presque totalement échouées sous toutes les attaques
 
-**Défis techniques rencontrés** :
+#### Défis techniques rencontrés
 
 **1. Bug de compatibilité NumPy 2.x avec ART 1.18**
 
@@ -351,17 +326,41 @@ L'implémentation JSMA de ART calcule pour chaque échantillon un jacobien compl
 
 **Contrainte SLURM** : la partition GPU maximale de nibi (`gpubase_bygpu_b5`) permet jusqu'à 7 jours par job. Il est donc **techniquement impossible** de compléter JSMA sur le full test set en un seul job.
 
-**Choix méthodologique** :
+**Choix méthodologique retenu** :
 
-Un job de 7 jours (168h) a été lancé pour obtenir une preuve empirique de cette limitation, atteignant environ 57% de progression avant timeout. Suite à cela, JSMA sera appliqué sur un **échantillon stratifié** de taille réduite, pratique standard dans la littérature adversariale pour les attaques computationnellement coûteuses.
+Un job de 7 jours (168h) a été lancé pour obtenir une preuve empirique de cette limitation. En parallèle, JSMA est appliqué sur un **échantillon stratifié de 20 000 exemples** (2.4% du test set), pratique standard dans la littérature adversariale pour les attaques computationnellement coûteuses. C&W est appliqué sur le test complet (temps raisonnable).
 
 **Note sur le papier Awad et al.** : le papier ne précise pas la méthodologie exacte d'application de JSMA sur leur dataset. Notre limitation est probablement partagée par les auteurs (utilisation implicite d'échantillonnage ou d'une implémentation optimisée non publique).
 
-**3. Sauvegarde des résultats**
+**3. Sauvegarde des résultats intermédiaires**
 
 ART ne fait pas de checkpointing pendant l'exécution de `attack.generate()`. Si le job SLURM est terminé avant complétion, les résultats intermédiaires sont perdus. Cette limitation empêche de "reprendre" une attaque partielle avec ART.
 
-Une solution alternative (implémentation custom avec checkpoints périodiques) serait envisageable mais dépasse le cadre de ce projet de reproduction.
+**4. Migration entre clusters (nibi et narval)**
+
+Une tentative de migration vers narval a été effectuée pour réduire les temps d'attente en queue. Le compte SLURM n'étant pas encore activé sur narval (`sacctmgr` retourne vide), le développement se poursuit sur nibi.
+
+### Étape 7 — Test de vulnérabilité du baseline
+
+Cette étape est intégrée à l'étape 6 : chaque attaque générée est immédiatement évaluée sur le baseline v4. Les résultats sont documentés dans le tableau de l'étape 6.
+
+**Interprétation** : le baseline v4 est **très vulnérable** aux attaques adversariales, particulièrement à DeepFool qui fait chuter l'accuracy de 99.69% à 16.71%. Cette vulnérabilité motive l'implémentation des 4 mécanismes de défense de l'étape 8.
+
+### Étape 8 — Mécanismes de défense
+
+**En cours d'implémentation.**
+
+Quatre défenses seront implémentées séquentiellement :
+
+1. **Label Smoothing (LS)** — En préparation
+2. **Adversarial Training (AT)** — À faire
+3. **Gaussian Augmentation (GA)** — À faire
+4. **Denoising Autoencoder (DAE)** — À faire
+
+Chaque défense sera :
+- Entraînée avec les mêmes hyperparamètres que le baseline v4 (lr=0.001, scheduler, 50 epochs)
+- Évaluée sur données propres + les 6 attaques adversariales
+- Sauvegardée séparément pour permettre l'agrégation à l'étape 9
 
 ---
 
@@ -384,6 +383,7 @@ IDS-Adversarial-Defense/
 ├── results/               Sorties (logs, checkpoints, figures)
 │   ├── logs/              Logs d'exécution
 │   ├── checkpoints/       Modèles entraînés
+│   ├── attacks/           Exemples adversariaux générés
 │   └── figures/           Graphiques pour le rapport
 └── tests/                 Tests unitaires
 ```
@@ -450,14 +450,21 @@ sbatch scripts/06_train_baseline.sh
 
 # Génération des graphiques (post-entraînement)
 python scripts/07_plot_results.py
+
+# Génération des attaques adversariales (via SLURM avec GPU)
+sbatch scripts/08_generate_attacks.sh
+
+# Génération JSMA (échantillon 20k) + C&W (full test) via SLURM
+sbatch scripts/09_generate_attacks_jsma_sample.sh
 ```
 
 ### Scripts à venir
 
-- `08_generate_attacks.py` : génération des 6 attaques adversariales
-- `09_test_vulnerability.py` : évaluation de la vulnérabilité du baseline
-- `10_train_defenses.py` : entraînement des 4 mécanismes de défense
-- `11_ensemble.py` : agrégation et optimisation de l'ensemble
+- `12_defense_label_smoothing.py` : défense par Label Smoothing
+- `13_defense_adversarial_training.py` : défense par Adversarial Training
+- `14_defense_gaussian_augmentation.py` : défense par Gaussian Augmentation
+- `15_defense_denoising_autoencoder.py` : défense par Denoising Autoencoder
+- `16_ensemble.py` : agrégation et optimisation par vote majoritaire et moyenne pondérée
 
 ---
 
@@ -507,7 +514,9 @@ Le CIC-IDS 2017 contient 2.8 millions de flux réseau étiquetés en 15 classes 
 | Ensemble simple (Majority Voting) | 84.35% |
 | **Ensemble optimisé (Majority Voting)** | **87.49%** |
 
-## Nos résultats actuels (baseline v4, CIC-IDS 2017)
+## Nos résultats actuels
+
+### Baseline v4 (CIC-IDS 2017)
 
 | Métrique | Notre baseline | Papier | Écart |
 |---|---:|---:|---:|
@@ -515,14 +524,26 @@ Le CIC-IDS 2017 contient 2.8 millions de flux réseau étiquetés en 15 classes 
 | F1 weighted | 99.72% | Non détaillé | — |
 | F1 macro | 80.17% | Non détaillé | — |
 
+### Vulnérabilité du baseline sous attaques
+
+| Attaque | Accuracy | Chute vs baseline |
+|---|---:|---:|
+| Baseline (clean) | 99.69% | — |
+| FGSM | 83.25% | -16.4 pts |
+| BIM | 72.10% | -27.6 pts |
+| PGD | 78.48% | -21.2 pts |
+| DeepFool | 16.71% | -82.9 pts |
+| JSMA | En cours | — |
+| C&W | En cours | — |
+
 ---
 
 ## Environnement de développement
 
 Le projet utilise une architecture hybride :
 
-- **Développement local** : Arch Linux, Python 3.12, VSCode
-- **Exécution intensive** : Alliance Canada (serveur nibi), Python 3.11, jobs SLURM
+- **Développement local** : Arch Linux (Python 3.12) + Windows PowerShell (édition secondaire)
+- **Exécution intensive** : Alliance Canada (serveur nibi), Python 3.11, jobs SLURM avec GPU H100
 - **Synchronisation** : Git + GitHub (dépôt privé)
 
 ## Références principales
