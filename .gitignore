@@ -59,3 +59,6 @@ Thumbs.db
 .env
 *.key
 kaggle.json
+
+# Historiques d'entraînement (trop lourds, contiennent toutes les prédictions)
+results/logs/*.pkl
