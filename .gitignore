@@ -1,8 +1,6 @@
-
-# ================================
 # Environnement Python
-# ================================
 venv/
+ENV/
 __pycache__/
 *.py[cod]
 *.so
@@ -10,48 +8,54 @@ __pycache__/
 *.egg-info/
 .python-version
 
-# ================================
-# Données (JAMAIS commit les datasets !)
-# ================================
+# Données brutes et prétraitées (trop lourdes)
+data
+data/
 data/raw/
 data/processed/
 *.csv
 *.pcap
-*.pkl
 *.parquet
 
-# ================================
-# Modèles entraînés
-# ================================
+# Pickles de données (X_train, X_test, etc.) mais pas les résultats
+data/**/*.pkl
+results/attacks/*.pkl
+
+# Modèles : ignorer partout SAUF results/checkpoints/
 *.pth
 *.pt
 *.h5
 *.ckpt
+!results/checkpoints/*.pth
+!results/checkpoints/*.pt
+!results/checkpoints/*.h5
+!results/checkpoints/*.ckpt
 
-!results/figures/final_*
+# Logs SLURM et logs texte
+results/logs/slurm_*.out
+results/logs/slurm_*.err
+results/logs/*.txt
 
-# ================================
+# Figures : autoriser final_*, attacks_*, cm_*
+results/figures/*.png
+!results/figures/final_*.png
+!results/figures/attacks_*.png
+!results/figures/cm_*.png
+
 # Jupyter
-# ================================
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
-# ================================
 # IDE
-# ================================
 .vscode/
 .idea/
 *.swp
 
-# ================================
 # OS
-# ================================
 .DS_Store
 Thumbs.db
 
-# ================================
 # Secrets
-# ================================
 .env
 *.key
 kaggle.json
