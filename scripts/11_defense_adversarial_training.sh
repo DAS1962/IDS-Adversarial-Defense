@@ -1,4 +1,3 @@
-
 #!/bin/bash
 #SBATCH --job-name=defense_at
 #SBATCH --account=def-smoolak_gpu
@@ -24,7 +23,7 @@ source ~/ENV/bin/activate
 
 cd ~/IDS-Adversarial-Defense
 
-python -u scripts/13_defense_adversarial_training.py
+python -u scripts/11_defense_adversarial_training.py
 
 echo
 echo "=== Job SLURM termine ==="

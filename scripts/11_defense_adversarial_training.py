@@ -1,107 +1,94 @@
-
 """
 Défense par Adversarial Training (AT).
 
-Entraîne un DNN sur un mélange 50/50 d'exemples propres et d'exemples adversariaux
-générés à la volée avec FGSM. Architecture et hyperparamètres identiques au
-baseline v4 pour permettre une comparaison directe.
+Le modèle est entraîné sur un mélange 50/50 d'exemples propres et d'exemples
+adversariaux générés à la volée avec FGSM. Après l'entraînement, on évalue
+le modèle sur les données propres et sur les 6 attaques adversariales.
+
+Référence : Madry et al. 2018, Awad et al. 2025.
 """
 
-from __future__ import annotations
-
-import json
-import pickle
+import sys
 import time
-from datetime import datetime
-from pathlib import Path
-
+import joblib
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from pathlib import Path
+from datetime import datetime
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import (
     accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
     classification_report,
     confusion_matrix,
-    f1_score,
 )
-from torch.utils.data import DataLoader, TensorDataset
 
-SEED = 42
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.models.dnn import BaselineDNN
+
+
+DATA_DIR = Path("data/processed")
+CHECKPOINT_DIR = Path("results/checkpoints")
+LOG_DIR = Path("results/logs")
+ATTACKS_DIR = Path("results/attacks")
+
+# Hyperparamètres de l'entraînement
 EPOCHS = 50
 BATCH_SIZE = 128
-LR_INIT = 1e-3
+LR_INIT = 0.001
 LR_MIN = 1e-5
 LR_PATIENCE = 5
 LR_FACTOR = 0.5
+RANDOM_STATE = 42
+
+# Hyperparamètres de l'attaque FGSM utilisée pendant l'entraînement
 FGSM_EPSILON = 0.05
 ADV_RATIO = 0.5
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "processed"
-CHECKPOINT_DIR = PROJECT_ROOT / "results" / "checkpoints"
-FIGURES_DIR = PROJECT_ROOT / "results" / "figures"
-LOG_DIR = PROJECT_ROOT / "results" / "logs"
+# Architecture
+NUM_CLASSES = 15
+INPUT_DIM = 58
 
-for d in (CHECKPOINT_DIR, FIGURES_DIR, LOG_DIR):
-    d.mkdir(parents=True, exist_ok=True)
-
-
-class BaselineDNN(nn.Module):
-    """Architecture identique au baseline v4."""
-
-    def __init__(self, input_dim: int, num_classes: int) -> None:
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 512),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(256, num_classes),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+# Fichiers X_adv pour l'évaluation finale
+ATTACK_FILES = [
+    ("FGSM", "X_adv_fgsm.pkl"),
+    ("BIM", "X_adv_bim.pkl"),
+    ("PGD", "X_adv_pgd.pkl"),
+    ("DeepFool", "X_adv_deepfool.pkl"),
+    ("JSMA", "X_adv_jsma.pkl"),
+    ("CW", "X_adv_cw.pkl"),
+]
 
 
-def set_seed(seed: int) -> None:
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+def load_data():
+    """Charge les données d'entraînement et de test."""
+    print("Chargement des données...")
+    X_train = pd.read_pickle(DATA_DIR / "X_train.pkl")
+    y_train = pd.read_pickle(DATA_DIR / "y_train.pkl")
+    X_test = pd.read_pickle(DATA_DIR / "X_test.pkl")
+    y_test = pd.read_pickle(DATA_DIR / "y_test.pkl")
 
-
-def load_data() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
-    with open(DATA_DIR / "X_train.pkl", "rb") as f:
-        X_train = pickle.load(f)
-    with open(DATA_DIR / "y_train.pkl", "rb") as f:
-        y_train = pickle.load(f)
-    with open(DATA_DIR / "X_test.pkl", "rb") as f:
-        X_test = pickle.load(f)
-    with open(DATA_DIR / "y_test.pkl", "rb") as f:
-        y_test = pickle.load(f)
-
-    if hasattr(X_train, "values"):
+    if isinstance(X_train, pd.DataFrame):
         X_train = X_train.values.astype(np.float32)
-    if hasattr(X_test, "values"):
+    if isinstance(X_test, pd.DataFrame):
         X_test = X_test.values.astype(np.float32)
-    if hasattr(y_train, "values"):
+    if isinstance(y_train, pd.Series):
         y_train = y_train.values
-    if hasattr(y_test, "values"):
+    if isinstance(y_test, pd.Series):
         y_test = y_test.values
 
-    num_classes = int(np.max(np.concatenate([y_train, y_test])) + 1)
-    return X_train, y_train, X_test, y_test, num_classes
+    print(f"  X_train : {X_train.shape}")
+    print(f"  X_test  : {X_test.shape}")
+    print()
+    return X_train, y_train, X_test, y_test
 
 
-def make_loaders(
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    X_test: np.ndarray,
-    y_test: np.ndarray,
-) -> tuple[DataLoader, DataLoader]:
+def make_loaders(X_train, y_train, X_test, y_test):
+    """Crée les DataLoaders."""
     train_ds = TensorDataset(
         torch.from_numpy(X_train).float(),
         torch.from_numpy(y_train).long(),
@@ -111,48 +98,28 @@ def make_loaders(
         torch.from_numpy(y_test).long(),
     )
     train_loader = DataLoader(
-        train_ds,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        num_workers=2,
-        pin_memory=True,
+        train_ds, batch_size=BATCH_SIZE, shuffle=True,
+        num_workers=2, pin_memory=True,
     )
     test_loader = DataLoader(
-        test_ds,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=2,
-        pin_memory=True,
+        test_ds, batch_size=BATCH_SIZE, shuffle=False,
+        num_workers=2, pin_memory=True,
     )
     return train_loader, test_loader
 
 
-def fgsm_attack(
-    model: nn.Module,
-    x: torch.Tensor,
-    y: torch.Tensor,
-    epsilon: float,
-    criterion: nn.Module,
-) -> torch.Tensor:
-    """Génère des exemples adversariaux avec FGSM (une étape)."""
+def fgsm_attack(model, x, y, epsilon, criterion):
+    """Génère un exemple adversarial avec FGSM (une seule étape)."""
     x_adv = x.clone().detach().requires_grad_(True)
     logits = model(x_adv)
     loss = criterion(logits, y)
-    grad = torch.autograd.grad(loss, x_adv, retain_graph=False, create_graph=False)[0]
+    grad = torch.autograd.grad(loss, x_adv)[0]
     x_adv = x_adv.detach() + epsilon * grad.sign()
     return x_adv.detach()
 
 
-def train_epoch(
-    model: nn.Module,
-    loader: DataLoader,
-    optimizer: torch.optim.Optimizer,
-    criterion: nn.Module,
-    device: torch.device,
-    epsilon: float,
-    adv_ratio: float,
-) -> tuple[float, float]:
-    """Entraîne une epoch en mélangeant exemples propres et adversariaux."""
+def train_one_epoch(model, loader, optimizer, criterion, device, epsilon, adv_ratio):
+    """Entraîne le modèle une epoch avec mélange propre/adversarial."""
     model.train()
     total_loss = 0.0
     total_correct = 0
@@ -165,15 +132,18 @@ def train_epoch(
         n = x.size(0)
         n_adv = int(n * adv_ratio)
 
+        # On génère les adversariaux pour la moitié du batch
         if n_adv > 0:
             idx = torch.randperm(n, device=device)
             idx_adv = idx[:n_adv]
             idx_clean = idx[n_adv:]
 
+            # Mode eval pour désactiver le dropout pendant la génération
             model.eval()
             x_adv = fgsm_attack(model, x[idx_adv], y[idx_adv], epsilon, criterion)
             model.train()
 
+            # Batch mélangé : moitié propre + moitié adversarial
             x_batch = torch.cat([x[idx_clean], x_adv], dim=0)
             y_batch = torch.cat([y[idx_clean], y[idx_adv]], dim=0)
         else:
@@ -194,86 +164,137 @@ def train_epoch(
     return total_loss / total_seen, total_correct / total_seen
 
 
-@torch.no_grad()
-def evaluate(
-    model: nn.Module,
-    loader: DataLoader,
-    criterion: nn.Module,
-    device: torch.device,
-) -> tuple[float, float]:
+def evaluate(model, loader, criterion, device):
+    """Évalue le modèle sur un DataLoader."""
     model.eval()
     total_loss = 0.0
     total_correct = 0
     total_seen = 0
-    for x, y in loader:
-        x = x.to(device, non_blocking=True)
-        y = y.to(device, non_blocking=True)
-        logits = model(x)
-        loss = criterion(logits, y)
-        total_loss += loss.item() * y.size(0)
-        total_correct += (logits.argmax(dim=1) == y).sum().item()
-        total_seen += y.size(0)
+
+    with torch.no_grad():
+        for x, y in loader:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            logits = model(x)
+            loss = criterion(logits, y)
+            total_loss += loss.item() * y.size(0)
+            total_correct += (logits.argmax(dim=1) == y).sum().item()
+            total_seen += y.size(0)
+
     return total_loss / total_seen, total_correct / total_seen
 
 
-@torch.no_grad()
-def predict(
-    model: nn.Module,
-    loader: DataLoader,
-    device: torch.device,
-) -> np.ndarray:
+def predict_array(model, X, device):
+    """Prédit sur un array numpy en batchs."""
     model.eval()
-    preds = []
-    for x, _ in loader:
-        x = x.to(device, non_blocking=True)
-        preds.append(model(x).argmax(dim=1).cpu().numpy())
-    return np.concatenate(preds)
+    n = len(X)
+    preds = np.zeros(n, dtype=np.int64)
+
+    with torch.no_grad():
+        for i in range(0, n, BATCH_SIZE):
+            end = min(i + BATCH_SIZE, n)
+            xb = torch.tensor(X[i:end], dtype=torch.float32).to(device)
+            preds[i:end] = model(xb).argmax(dim=1).cpu().numpy()
+
+    return preds
 
 
-def main() -> None:
-    set_seed(SEED)
-    start = time.time()
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def compute_metrics(y_true, y_pred, name):
+    """Calcule les métriques standards pour un dataset."""
+    acc = accuracy_score(y_true, y_pred)
+    prec_macro = precision_score(y_true, y_pred, average="macro", zero_division=0)
+    prec_wght = precision_score(y_true, y_pred, average="weighted", zero_division=0)
+    rec_macro = recall_score(y_true, y_pred, average="macro", zero_division=0)
+    rec_wght = recall_score(y_true, y_pred, average="weighted", zero_division=0)
+    f1_macro = f1_score(y_true, y_pred, average="macro", zero_division=0)
+    f1_wght = f1_score(y_true, y_pred, average="weighted", zero_division=0)
 
-    print(f"Défense par Adversarial Training (AT)")
-    print(f"Date : {ts}")
+    return {
+        "attack": name,
+        "accuracy": acc,
+        "precision_macro": prec_macro,
+        "precision_weighted": prec_wght,
+        "recall_macro": rec_macro,
+        "recall_weighted": rec_wght,
+        "f1_macro": f1_macro,
+        "f1_weighted": f1_wght,
+        "confusion_matrix": confusion_matrix(y_true, y_pred, labels=list(range(NUM_CLASSES))),
+    }
+
+
+def print_metrics(m):
+    """Affiche les métriques d'une évaluation."""
+    print(f"  Accuracy               : {m['accuracy']:.4f}")
+    print(f"  Precision (macro)      : {m['precision_macro']:.4f}")
+    print(f"  Precision (weighted)   : {m['precision_weighted']:.4f}")
+    print(f"  Recall (macro)         : {m['recall_macro']:.4f}")
+    print(f"  Recall (weighted)      : {m['recall_weighted']:.4f}")
+    print(f"  F1 (macro)             : {m['f1_macro']:.4f}")
+    print(f"  F1 (weighted)          : {m['f1_weighted']:.4f}")
+
+
+def print_summary(results):
+    """Affiche le tableau récapitulatif final."""
+    print("\n" + "=" * 100)
+    print("Résumé - Défense Adversarial Training")
+    print("=" * 100)
+    header = (
+        f"{'Attaque':<12} {'Accuracy':>10} {'Prec. macro':>12} "
+        f"{'Rec. macro':>11} {'F1 macro':>10} {'F1 wght':>10}"
+    )
+    print(header)
+    print("-" * 100)
+    for r in results:
+        print(
+            f"{r['attack']:<12} {r['accuracy']:>10.4f} "
+            f"{r['precision_macro']:>12.4f} {r['recall_macro']:>11.4f} "
+            f"{r['f1_macro']:>10.4f} {r['f1_weighted']:>10.4f}"
+        )
+    print("=" * 100)
+
+
+def main():
+    print("=" * 70)
+    print("Défense par Adversarial Training (AT)")
+    print(f"Date : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 70)
     print()
 
+    # Reproductibilité
+    torch.manual_seed(RANDOM_STATE)
+    np.random.seed(RANDOM_STATE)
+
+    # Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device : {device}")
     if device.type == "cuda":
         print(f"GPU    : {torch.cuda.get_device_name(0)}")
     print()
 
-    print("Chargement des données...")
-    X_train, y_train, X_test, y_test, num_classes = load_data()
-    print(f"  X_train : {X_train.shape}")
-    print(f"  X_test  : {X_test.shape}")
-    print(f"  Classes : {num_classes}")
-    print()
-
-    print("Création des DataLoaders...")
+    # Chargement des données
+    X_train, y_train, X_test, y_test = load_data()
     train_loader, test_loader = make_loaders(X_train, y_train, X_test, y_test)
-    print(f"  Train : {len(train_loader):,} batches")
-    print(f"  Test  : {len(test_loader):,} batches")
+    print(f"Batches train : {len(train_loader):,}")
+    print(f"Batches test  : {len(test_loader):,}")
     print()
 
+    # Modèle
     print("Création du modèle...")
-    model = BaselineDNN(X_train.shape[1], num_classes).to(device)
+    model = BaselineDNN(input_dim=INPUT_DIM, hidden1=512, hidden2=256, output_dim=NUM_CLASSES)
+    model = model.to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Paramètres : {n_params:,}")
     print()
 
+    # Optimizer et scheduler
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LR_INIT)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode="max",
-        factor=LR_FACTOR,
-        patience=LR_PATIENCE,
-        min_lr=LR_MIN,
+        optimizer, mode="max", factor=LR_FACTOR,
+        patience=LR_PATIENCE, min_lr=LR_MIN,
     )
 
+    # Entraînement
     print("Début de l'entraînement adversarial")
     print(f"  Epochs            : {EPOCHS}")
     print(f"  Learning rate init: {LR_INIT}")
@@ -282,21 +303,19 @@ def main() -> None:
     print(f"  Batch size        : {BATCH_SIZE}")
     print()
 
-    history = {
-        "train_loss": [],
-        "train_acc": [],
-        "test_loss": [],
-        "test_acc": [],
-        "lr": [],
-    }
+    history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": [], "lr": []}
     best_acc = 0.0
     best_epoch = -1
     ckpt_path = CHECKPOINT_DIR / "defense_at_best.pth"
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+
+    start_train = time.time()
 
     for epoch in range(1, EPOCHS + 1):
         t0 = time.time()
-        train_loss, train_acc = train_epoch(
-            model, train_loader, optimizer, criterion, device, FGSM_EPSILON, ADV_RATIO
+        train_loss, train_acc = train_one_epoch(
+            model, train_loader, optimizer, criterion,
+            device, FGSM_EPSILON, ADV_RATIO,
         )
         test_loss, test_acc = evaluate(model, test_loader, criterion, device)
         scheduler.step(test_acc)
@@ -320,71 +339,76 @@ def main() -> None:
         if test_acc > best_acc:
             best_acc = test_acc
             best_epoch = epoch
-            torch.save(
-                {
-                    "model_state_dict": model.state_dict(),
-                    "epoch": epoch,
-                    "test_acc": test_acc,
-                    "input_dim": X_train.shape[1],
-                    "num_classes": num_classes,
-                },
-                ckpt_path,
-            )
+            torch.save({
+                "model_state_dict": model.state_dict(),
+                "epoch": epoch,
+                "test_acc": test_acc,
+            }, ckpt_path)
             print(f"           -> Nouveau meilleur modèle sauvegardé ({test_acc:.4f})", flush=True)
 
+    train_time_min = (time.time() - start_train) / 60
     print()
-    print(f"Entraînement terminé en {(time.time() - start) / 60:.1f} min")
+    print(f"Entraînement terminé en {train_time_min:.1f} min")
     print(f"Meilleur epoch : {best_epoch} | test_acc = {best_acc:.4f}")
     print()
 
-    print("Évaluation finale sur le test set...")
-    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=True)
+    # Chargement du meilleur modèle
+    print("Chargement du meilleur modèle pour évaluation...")
+    checkpoint = torch.load(ckpt_path, weights_only=False, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
-    y_pred = predict(model, test_loader, device)
+    model.eval()
 
-    acc = accuracy_score(y_test, y_pred)
-    f1_macro = f1_score(y_test, y_pred, average="macro", zero_division=0)
-    f1_weighted = f1_score(y_test, y_pred, average="weighted", zero_division=0)
-
-    print(f"  Accuracy    : {acc:.4f}")
-    print(f"  F1 macro    : {f1_macro:.4f}")
-    print(f"  F1 weighted : {f1_weighted:.4f}")
+    # Évaluation sur données propres et attaques
     print()
+    print("=" * 70)
+    print("Évaluation sur données propres et attaques adversariales")
+    print("=" * 70)
 
-    print("Rapport détaillé :")
-    print(classification_report(y_test, y_pred, digits=4, zero_division=0))
+    all_results = []
 
-    cm = confusion_matrix(y_test, y_pred)
+    print("\n--- Données propres ---")
+    y_pred_clean = predict_array(model, X_test, device)
+    clean_metrics = compute_metrics(y_test, y_pred_clean, "Clean")
+    print_metrics(clean_metrics)
+    all_results.append(clean_metrics)
 
-    metrics = {
-        "defense": "adversarial_training",
-        "date": ts,
+    for name, x_file in ATTACK_FILES:
+        x_path = ATTACKS_DIR / x_file
+        if not x_path.exists():
+            print(f"\n--- {name} ---")
+            print(f"  Fichier {x_file} non trouvé, skip")
+            continue
+
+        print(f"\n--- {name} ---")
+        X_adv = joblib.load(x_path)
+        y_pred = predict_array(model, X_adv, device)
+        m = compute_metrics(y_test, y_pred, name)
+        print_metrics(m)
+        all_results.append(m)
+        del X_adv
+
+    print_summary(all_results)
+
+    # Sauvegarde des résultats
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = LOG_DIR / f"defense_at_{timestamp}.pkl"
+    joblib.dump({
+        "results": all_results,
+        "history": history,
         "hyperparameters": {
             "epochs": EPOCHS,
             "batch_size": BATCH_SIZE,
             "lr_init": LR_INIT,
-            "lr_min": LR_MIN,
-            "lr_patience": LR_PATIENCE,
-            "lr_factor": LR_FACTOR,
             "fgsm_epsilon": FGSM_EPSILON,
             "adv_ratio": ADV_RATIO,
-            "seed": SEED,
+            "seed": RANDOM_STATE,
         },
         "best_epoch": best_epoch,
-        "test_accuracy": float(acc),
-        "f1_macro": float(f1_macro),
-        "f1_weighted": float(f1_weighted),
-        "training_time_min": (time.time() - start) / 60,
-        "history": history,
-    }
-    metrics_path = LOG_DIR / "defense_at_metrics.json"
-    with open(metrics_path, "w") as f:
-        json.dump(metrics, f, indent=2)
-    print(f"Métriques sauvegardées : {metrics_path}")
-
-    cm_path = CHECKPOINT_DIR / "defense_at_confusion_matrix.npy"
-    np.save(cm_path, cm)
-    print(f"Matrice de confusion   : {cm_path}")
+        "training_time_min": train_time_min,
+    }, out_path)
+    print(f"\nRésultats sauvegardés : {out_path}")
+    print("\nDéfense Adversarial Training terminée")
 
 
 if __name__ == "__main__":
