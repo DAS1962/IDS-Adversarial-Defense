@@ -1,19 +1,19 @@
 """
-Évaluation du baseline v4 sur toutes les attaques adversariales générées,
-et génération des figures comparatives.
+Évaluation du baseline v4 sur les 6 attaques adversariales (full test set),
+et génération des figures comparatives complètes (accuracy, precision, recall, F1).
 
 Charge automatiquement tous les fichiers X_adv_*.pkl présents dans
-results/attacks/. Recalcule les métriques (accuracy, precision, recall,
-F1 macro/weighted) sans dépendre de fichiers de métriques précalculés.
+results/attacks/. Recalcule les métriques sans dépendre de fichiers précalculés.
 
 Génère :
   - CSV récapitulatif : results/figures/attacks_summary.csv
-  - Bar plot accuracy par attaque
-  - Bar plot chute d'accuracy vs baseline
-  - Heatmap F1 par classe et par attaque
-  - Comparaison F1 macro vs F1 weighted
+  - Bar plots individuels : accuracy, precision (macro/weighted), recall (macro/weighted), F1 (macro/weighted)
+  - Chute d'accuracy vs baseline
+  - Vues combinées 4 métriques (macro et weighted séparées)
+  - Comparaisons macro vs weighted pour precision, recall, F1
+  - Heatmaps F1, precision, recall par classe × attaque
+  - Comparaison avec le papier
   - Matrices de confusion (une par attaque)
-  - Comparaison avec les résultats du papier
 """
 
 import sys
@@ -47,17 +47,15 @@ BATCH_SIZE = 512
 NUM_CLASSES = 15
 INPUT_DIM = 58
 
-# Configuration : nom d'affichage, fichier X_adv, fichier y (None = y_test)
 ATTACK_FILES = [
-    ("FGSM",     "X_adv_fgsm.pkl",              None),
-    ("BIM",      "X_adv_bim.pkl",               None),
-    ("PGD",      "X_adv_pgd.pkl",               None),
-    ("DeepFool", "X_adv_deepfool.pkl",          None),
-    ("JSMA",     "X_adv_jsma_sample30k.pkl",    "y_jsma_sample30k.pkl"),
-    ("CW",       "X_adv_cw.pkl",                None),
+    ("FGSM",     "X_adv_fgsm.pkl"),
+    ("BIM",      "X_adv_bim.pkl"),
+    ("PGD",      "X_adv_pgd.pkl"),
+    ("DeepFool", "X_adv_deepfool.pkl"),
+    ("JSMA",     "X_adv_jsma.pkl"),
+    ("CW",       "X_adv_cw.pkl"),
 ]
 
-# Résultats du papier (Awad et al. 2025) pour comparaison
 PAPER_RESULTS = {
     "Clean":    0.9811,
     "FGSM":     0.8590,
@@ -121,23 +119,76 @@ def compute_metrics(y_true, y_pred, name, all_labels):
         "f1_macro": f1_score(y_true, y_pred, average="macro", zero_division=0),
         "f1_weighted": f1_score(y_true, y_pred, average="weighted", zero_division=0),
         "f1_per_class": f1_score(y_true, y_pred, average=None, labels=all_labels, zero_division=0),
+        "precision_per_class": precision_score(y_true, y_pred, average=None, labels=all_labels, zero_division=0),
+        "recall_per_class": recall_score(y_true, y_pred, average=None, labels=all_labels, zero_division=0),
         "confusion_matrix": confusion_matrix(y_true, y_pred, labels=all_labels),
     }
 
 
-def plot_accuracy_bar(results, baseline_acc, class_names, out_path):
+def plot_single_metric_bar(results, clean_metrics, metric_key, title, out_path):
     names = ["Clean"] + [r["attack"] for r in results]
-    accs = [baseline_acc] + [r["accuracy"] for r in results]
-
-    fig, ax = plt.subplots(figsize=(10, 6))
+    values = [clean_metrics[metric_key]] + [r[metric_key] for r in results]
+    fig, ax = plt.subplots(figsize=(11, 6))
     colors = ["#2ecc71"] + ["#e74c3c"] * len(results)
-    bars = ax.bar(names, accs, color=colors, edgecolor="black")
-    for bar, acc in zip(bars, accs):
+    bars = ax.bar(names, values, color=colors, edgecolor="black")
+    for bar, v in zip(bars, values):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                f"{acc:.4f}", ha="center", fontsize=10, fontweight="bold")
-    ax.set_ylabel("Accuracy", fontsize=12)
-    ax.set_title("Baseline v4 : Accuracy sur données propres et sous attaques", fontsize=13)
+                f"{v:.4f}", ha="center", fontsize=10, fontweight="bold")
+    ax.set_ylabel(title, fontsize=12)
+    ax.set_title(f"Baseline v4 : {title} sur données propres et sous attaques", fontsize=13)
     ax.set_ylim(0, 1.08)
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Sauvegarde : {out_path.name}")
+
+
+def plot_all_metrics_grouped(results, clean_metrics, average, out_path):
+    names = ["Clean"] + [r["attack"] for r in results]
+    metrics = ["accuracy", f"precision_{average}", f"recall_{average}", f"f1_{average}"]
+    metric_labels = ["Accuracy", f"Precision {average}", f"Recall {average}", f"F1 {average}"]
+
+    data = np.array([
+        [clean_metrics[m] for m in metrics]
+    ] + [
+        [r[m] for m in metrics] for r in results
+    ])
+
+    x = np.arange(len(names))
+    width = 0.2
+    fig, ax = plt.subplots(figsize=(14, 6))
+    colors = ["#2ecc71", "#3498db", "#f39c12", "#9b59b6"]
+    for i, (lab, col) in enumerate(zip(metric_labels, colors)):
+        ax.bar(x + (i - 1.5) * width, data[:, i], width, label=lab, color=col, edgecolor="black")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names)
+    ax.set_ylabel("Score", fontsize=12)
+    ax.set_title(f"Comparaison des 4 métriques ({average}) par attaque", fontsize=13)
+    ax.legend(loc="upper right")
+    ax.set_ylim(0, 1.08)
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Sauvegarde : {out_path.name}")
+
+
+def plot_macro_vs_weighted(results, metric_name, out_path):
+    names = [r["attack"] for r in results]
+    macro = [r[f"{metric_name}_macro"] for r in results]
+    weighted = [r[f"{metric_name}_weighted"] for r in results]
+    x = np.arange(len(names))
+    width = 0.35
+    fig, ax = plt.subplots(figsize=(11, 6))
+    ax.bar(x - width / 2, macro, width, label=f"{metric_name} macro", color="#3498db", edgecolor="black")
+    ax.bar(x + width / 2, weighted, width, label=f"{metric_name} weighted", color="#f39c12", edgecolor="black")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names)
+    ax.set_ylabel(metric_name.capitalize(), fontsize=12)
+    ax.set_title(f"{metric_name.capitalize()} macro vs weighted par attaque\n"
+                 "(gros écart = classes minoritaires effondrées)", fontsize=13)
+    ax.legend()
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -148,8 +199,7 @@ def plot_accuracy_bar(results, baseline_acc, class_names, out_path):
 def plot_accuracy_drop(results, baseline_acc, out_path):
     names = [r["attack"] for r in results]
     drops = [(baseline_acc - r["accuracy"]) * 100 for r in results]
-
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(11, 6))
     bars = ax.bar(names, drops, color="#c0392b", edgecolor="black")
     for bar, d in zip(bars, drops):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
@@ -163,42 +213,18 @@ def plot_accuracy_drop(results, baseline_acc, out_path):
     print(f"  Sauvegarde : {out_path.name}")
 
 
-def plot_f1_macro_vs_weighted(results, out_path):
+def plot_metric_heatmap(results, class_names, metric_key, title, out_path):
+    data = np.array([r[metric_key] for r in results])
     names = [r["attack"] for r in results]
-    f1_m = [r["f1_macro"] for r in results]
-    f1_w = [r["f1_weighted"] for r in results]
-
-    x = np.arange(len(names))
-    width = 0.35
-    fig, ax = plt.subplots(figsize=(11, 6))
-    ax.bar(x - width / 2, f1_m, width, label="F1 macro", color="#3498db", edgecolor="black")
-    ax.bar(x + width / 2, f1_w, width, label="F1 weighted", color="#f39c12", edgecolor="black")
-    ax.set_xticks(x)
-    ax.set_xticklabels(names)
-    ax.set_ylabel("F1 score", fontsize=12)
-    ax.set_title("F1 macro vs F1 weighted par attaque\n"
-                 "(gros écart = classes minoritaires effondrées)", fontsize=13)
-    ax.legend()
-    ax.grid(axis="y", alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Sauvegarde : {out_path.name}")
-
-
-def plot_f1_heatmap(results, class_names, out_path):
-    data = np.array([r["f1_per_class"] for r in results])
-    names = [r["attack"] for r in results]
-
     fig, ax = plt.subplots(figsize=(14, 6))
     sns.heatmap(
         data, annot=True, fmt=".2f", cmap="RdYlGn", vmin=0, vmax=1,
-        xticklabels=class_names, yticklabels=names, cbar_kws={"label": "F1 score"},
+        xticklabels=class_names, yticklabels=names, cbar_kws={"label": title},
         ax=ax, linewidths=0.5,
     )
     ax.set_xlabel("Classe", fontsize=12)
     ax.set_ylabel("Attaque", fontsize=12)
-    ax.set_title("F1 score par classe et par attaque", fontsize=13)
+    ax.set_title(f"{title} par classe et par attaque", fontsize=13)
     plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -211,10 +237,9 @@ def plot_paper_comparison(results, our_baseline_acc, out_path):
     ours = [our_baseline_acc] + [r["accuracy"] for r in results]
     theirs = [PAPER_RESULTS["Clean"]] + [PAPER_RESULTS.get(n, np.nan) for n in attack_names]
     labels = ["Clean"] + attack_names
-
     x = np.arange(len(labels))
     width = 0.35
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, ax = plt.subplots(figsize=(12, 6))
     ax.bar(x - width / 2, ours, width, label="Notre implémentation",
            color="#27ae60", edgecolor="black")
     ax.bar(x + width / 2, theirs, width, label="Papier (Awad 2025)",
@@ -269,32 +294,28 @@ def main():
     print("Recalcul métriques baseline sur données propres...")
     y_pred_clean = predict(model, X_test, device)
     clean_metrics = compute_metrics(y_test, y_pred_clean, "Clean", all_labels)
-    print(f"  Accuracy : {clean_metrics['accuracy']:.4f}")
-    print(f"  F1 macro : {clean_metrics['f1_macro']:.4f}")
-    print(f"  F1 wght  : {clean_metrics['f1_weighted']:.4f}\n")
+    print(f"  Accuracy    : {clean_metrics['accuracy']:.4f}")
+    print(f"  Prec macro  : {clean_metrics['precision_macro']:.4f}")
+    print(f"  Rec  macro  : {clean_metrics['recall_macro']:.4f}")
+    print(f"  F1   macro  : {clean_metrics['f1_macro']:.4f}\n")
 
     results = []
     print("Évaluation des attaques :\n")
-    for name, x_file, y_file in ATTACK_FILES:
+    for name, x_file in ATTACK_FILES:
         x_path = ATTACKS_DIR / x_file
         if not x_path.exists():
             print(f"  [SKIP] {name} : {x_file} introuvable")
             continue
-
         print(f"  -> {name} ({x_file})")
         X_adv = joblib.load(x_path)
-        if y_file is not None:
-            y_true = joblib.load(ATTACKS_DIR / y_file)
-        else:
-            y_true = y_test
-
-        if len(X_adv) != len(y_true):
-            print(f"     [WARN] taille mismatch {len(X_adv)} vs {len(y_true)}, skip")
+        if len(X_adv) != len(y_test):
+            print(f"     [WARN] taille mismatch {len(X_adv)} vs {len(y_test)}, skip")
             continue
-
         y_pred = predict(model, X_adv, device)
-        m = compute_metrics(y_true, y_pred, name, all_labels)
-        print(f"     Accuracy: {m['accuracy']:.4f} | F1 macro: {m['f1_macro']:.4f} | F1 wght: {m['f1_weighted']:.4f}")
+        m = compute_metrics(y_test, y_pred, name, all_labels)
+        print(f"     Acc: {m['accuracy']:.4f} | Prec: {m['precision_macro']:.4f}/{m['precision_weighted']:.4f} | "
+              f"Rec: {m['recall_macro']:.4f}/{m['recall_weighted']:.4f} | "
+              f"F1: {m['f1_macro']:.4f}/{m['f1_weighted']:.4f}")
         results.append(m)
         del X_adv
 
@@ -336,19 +357,60 @@ def main():
     print(df.to_string(index=False))
     print()
 
-    print("Génération des figures...")
-    plot_accuracy_bar(results, clean_metrics["accuracy"], class_names,
-                      FIGURES_DIR / "attacks_accuracy_bar.png")
+    print("Génération des figures...\n")
+
+    print("  [Bar plots individuels]")
+    plot_single_metric_bar(results, clean_metrics, "accuracy",
+                           "Accuracy",
+                           FIGURES_DIR / "attacks_accuracy_bar.png")
+    plot_single_metric_bar(results, clean_metrics, "precision_macro",
+                           "Precision (macro)",
+                           FIGURES_DIR / "attacks_precision_macro_bar.png")
+    plot_single_metric_bar(results, clean_metrics, "precision_weighted",
+                           "Precision (weighted)",
+                           FIGURES_DIR / "attacks_precision_weighted_bar.png")
+    plot_single_metric_bar(results, clean_metrics, "recall_macro",
+                           "Recall (macro)",
+                           FIGURES_DIR / "attacks_recall_macro_bar.png")
+    plot_single_metric_bar(results, clean_metrics, "recall_weighted",
+                           "Recall (weighted)",
+                           FIGURES_DIR / "attacks_recall_weighted_bar.png")
+    plot_single_metric_bar(results, clean_metrics, "f1_macro",
+                           "F1 (macro)",
+                           FIGURES_DIR / "attacks_f1_macro_bar.png")
+    plot_single_metric_bar(results, clean_metrics, "f1_weighted",
+                           "F1 (weighted)",
+                           FIGURES_DIR / "attacks_f1_weighted_bar.png")
+
+    print("\n  [Vues combinees 4 metriques]")
+    plot_all_metrics_grouped(results, clean_metrics, "macro",
+                             FIGURES_DIR / "attacks_all_metrics_macro.png")
+    plot_all_metrics_grouped(results, clean_metrics, "weighted",
+                             FIGURES_DIR / "attacks_all_metrics_weighted.png")
+
+    print("\n  [Macro vs weighted]")
+    plot_macro_vs_weighted(results, "precision",
+                           FIGURES_DIR / "attacks_precision_macro_vs_weighted.png")
+    plot_macro_vs_weighted(results, "recall",
+                           FIGURES_DIR / "attacks_recall_macro_vs_weighted.png")
+    plot_macro_vs_weighted(results, "f1",
+                           FIGURES_DIR / "attacks_f1_macro_vs_weighted.png")
+
+    print("\n  [Chute d'accuracy et comparaison papier]")
     plot_accuracy_drop(results, clean_metrics["accuracy"],
                        FIGURES_DIR / "attacks_accuracy_drop.png")
-    plot_f1_macro_vs_weighted(results,
-                              FIGURES_DIR / "attacks_f1_macro_vs_weighted.png")
-    plot_f1_heatmap(results, class_names,
-                    FIGURES_DIR / "attacks_f1_heatmap.png")
     plot_paper_comparison(results, clean_metrics["accuracy"],
                           FIGURES_DIR / "attacks_paper_comparison.png")
 
-    print("\n  Matrices de confusion :")
+    print("\n  [Heatmaps par classe]")
+    plot_metric_heatmap(results, class_names, "f1_per_class", "F1 score",
+                        FIGURES_DIR / "attacks_f1_heatmap.png")
+    plot_metric_heatmap(results, class_names, "precision_per_class", "Precision",
+                        FIGURES_DIR / "attacks_precision_heatmap.png")
+    plot_metric_heatmap(results, class_names, "recall_per_class", "Recall",
+                        FIGURES_DIR / "attacks_recall_heatmap.png")
+
+    print("\n  [Matrices de confusion]")
     plot_confusion_matrix(clean_metrics["confusion_matrix"], class_names,
                           "Clean (baseline v4)",
                           FIGURES_DIR / "cm_clean.png")
@@ -358,7 +420,7 @@ def main():
                               r["attack"],
                               FIGURES_DIR / f"cm_{safe}.png")
 
-    print(f"\nTerminé. Figures dans : {FIGURES_DIR}/")
+    print(f"\nTermine. Figures dans : {FIGURES_DIR}/")
 
 
 if __name__ == "__main__":
