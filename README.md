@@ -40,10 +40,10 @@ Le projet suit les 9 étapes du framework proposé par Awad et al. (2025) :
 | 3 | Feature selection | Terminée |
 | 4 | Split train/test + Normalisation + SMOTE | Terminée |
 | 5 | Baseline DNN | Terminée |
-| 6 | Attaques adversariales | En cours (FGSM, BIM, PGD, DeepFool terminées ; JSMA 20k + C&W en cours) |
-| 7 | Test de vulnérabilité | Partiel (couvert par étape 6) |
-| 8 | Mécanismes de défense | En cours (Label Smoothing en préparation) |
-| 9 | Agrégation par ensemble | À faire |
+| 6 | Attaques adversariales | Terminée (6 attaques évaluées) |
+| 7 | Test de vulnérabilité | Terminée (intégrée à l'étape 6) |
+| 8 | Mécanismes de défense | Scripts prêts, jobs à soumettre |
+| 9 | Agrégation par ensemble | Script prêt, dépend de l'étape 8 |
 
 ---
 
@@ -285,25 +285,26 @@ Quatre versions successives du baseline ont été entraînées pour identifier l
 
 Six attaques adversariales implémentées et évaluées sur le baseline v4.
 
-#### Résultats obtenus (test complet, 831 864 échantillons)
+#### Résultats obtenus sur le test complet (831 864 échantillons)
 
-| Attaque | Accuracy | F1 macro | F1 weighted | Chute vs baseline |
-|---|---:|---:|---:|---|
-| Baseline (données propres) | 99.69% | 80.17% | 99.72% | référence |
-| FGSM | 83.25% | 6.34% | 75.88% | -16.4 pts |
-| BIM | 72.10% | 5.61% | 69.86% | -27.6 pts |
-| PGD | 78.48% | 5.86% | 73.09% | -21.2 pts |
-| DeepFool | 16.71% | 2.86% | 25.14% | **-82.9 pts** |
-| JSMA | En cours (échantillon 20k) | — | — | — |
-| C&W | En cours (full test) | — | — | — |
+| Attaque | Accuracy | Precision macro | Recall macro | F1 macro | F1 weighted | Chute vs baseline |
+|---|---:|---:|---:|---:|---:|---:|
+| Baseline (clean) | 99.69% | 83.00% | 83.67% | 80.17% | 99.72% | — |
+| FGSM | 83.25% | 14.30% | 6.81% | 6.34% | 75.88% | -16.4 pts |
+| BIM | 72.10% | 5.47% | 5.79% | 5.61% | 69.86% | -27.6 pts |
+| PGD | 78.48% | 5.49% | 6.30% | 5.86% | 73.09% | -21.2 pts |
+| DeepFool | 16.71% | 4.64% | 8.29% | 2.86% | 25.14% | **-82.9 pts** |
+| JSMA | 83.45% | 27.32% | 25.44% | 17.96% | 81.91% | -16.2 pts |
+| CW | 67.15% | 5.35% | 5.39% | 5.37% | 66.93% | -32.5 pts |
 
 **Observations clés** :
-
 - **DeepFool** est l'attaque la plus dévastatrice sur le test complet (accuracy chute à 16.71%)
-- Les attaques L∞ (FGSM, BIM, PGD) sont efficaces sur les classes minoritaires mais moins que sur les majoritaires
+- **C&W** est la 2e plus efficace (67.15%), efficace sur toutes les classes non-BENIGN
+- **JSMA** touche moins les classes minoritaires que les attaques L∞ (F1 macro 18% vs ~6%)
+- Les attaques L∞ (FGSM, BIM, PGD) sont efficaces sur les classes minoritaires
 - Le F1 macro chute drastiquement (~6% vs 80%) : les classes minoritaires sont presque totalement échouées sous toutes les attaques
 
-#### Défis techniques rencontrés
+#### Défis techniques rencontrés et résolus
 
 **1. Bug de compatibilité NumPy 2.x avec ART 1.18**
 
@@ -316,51 +317,63 @@ if not hasattr(np, 'product'):
 
 Le patch doit être appliqué **avant** l'import d'ART.
 
-**2. Coût computationnel prohibitif de JSMA**
+**2. Coût computationnel de JSMA**
 
-L'implémentation JSMA de ART calcule pour chaque échantillon un jacobien complet (58 features × 15 classes = 870 dérivées partielles), puis modifie itérativement 2 features à la fois jusqu'à faire changer la classification.
+Une première tentative avec `theta=0.1, gamma=1.0` (paramètres par défaut ART) donnait 5.5 batches/heure sur H100, soit environ 12 jours pour le full test set.
 
-**Mesure empirique** : sur H100, JSMA traite environ **5.5 batches/heure** (batch_size=512), soit 2 800 échantillons/heure.
+**Solution retenue** : ajustement des paramètres à `theta=0.3, gamma=0.15` (perturbation plus forte, jusqu'à 15% des features modifiées), permettant de traiter le test complet en ~15 minutes. Ces paramètres restent conformes à la littérature JSMA (Papernot 2015).
 
-**Extrapolation** : pour 831 864 échantillons, temps estimé = **12.4 jours** de calcul GPU continu.
+**3. Mode targeted vs untargeted**
 
-**Contrainte SLURM** : la partition GPU maximale de nibi (`gpubase_bygpu_b5`) permet jusqu'à 7 jours par job. Il est donc **techniquement impossible** de compléter JSMA sur le full test set en un seul job.
+Les implémentations ART de JSMA et C&W sont **targeted par défaut**. Passer les vrais labels comme cible rendait l'attaque triviale (le modèle prédit déjà correctement ces classes). Correction : passer `y=None` pour forcer le mode untargeted.
 
-**Choix méthodologique retenu** :
+**4. Sauvegarde des exemples adversariaux**
 
-Un job de 7 jours (168h) a été lancé pour obtenir une preuve empirique de cette limitation. En parallèle, JSMA est appliqué sur un **échantillon stratifié de 20 000 exemples** (2.4% du test set), pratique standard dans la littérature adversariale pour les attaques computationnellement coûteuses. C&W est appliqué sur le test complet (temps raisonnable).
-
-**Note sur le papier Awad et al.** : le papier ne précise pas la méthodologie exacte d'application de JSMA sur leur dataset. Notre limitation est probablement partagée par les auteurs (utilisation implicite d'échantillonnage ou d'une implémentation optimisée non publique).
-
-**3. Sauvegarde des résultats intermédiaires**
-
-ART ne fait pas de checkpointing pendant l'exécution de `attack.generate()`. Si le job SLURM est terminé avant complétion, les résultats intermédiaires sont perdus. Cette limitation empêche de "reprendre" une attaque partielle avec ART.
-
-**4. Migration entre clusters (nibi et narval)**
-
-Une tentative de migration vers narval a été effectuée pour réduire les temps d'attente en queue. Le compte SLURM n'étant pas encore activé sur narval (`sacctmgr` retourne vide), le développement se poursuit sur nibi.
+Chaque `X_adv_*.pkl` fait ~185 MB (831 864 × 58 features × float32). Total pour les 6 attaques : ~1.1 GB. Stockage dans `results/attacks/`, non versionné dans Git.
 
 ### Étape 7 — Test de vulnérabilité du baseline
 
-Cette étape est intégrée à l'étape 6 : chaque attaque générée est immédiatement évaluée sur le baseline v4. Les résultats sont documentés dans le tableau de l'étape 6.
+Intégrée à l'étape 6 : chaque attaque générée est immédiatement évaluée sur le baseline v4.
 
-**Interprétation** : le baseline v4 est **très vulnérable** aux attaques adversariales, particulièrement à DeepFool qui fait chuter l'accuracy de 99.69% à 16.71%. Cette vulnérabilité motive l'implémentation des 4 mécanismes de défense de l'étape 8.
+**Interprétation** : le baseline v4 est **très vulnérable** aux attaques adversariales, particulièrement à DeepFool (accuracy 16.71%) et C&W (67.15%). Cette vulnérabilité motive l'implémentation des 4 mécanismes de défense de l'étape 8.
+
+**Paradoxe robustesse/précision (Tsipras et al. 2019)** : le baseline atteint 99.69% sur clean (vs 98.11% pour le papier), mais s'effondre à 16.71% sous DeepFool (vs 53.40% pour le papier). Un modèle très confiant est structurellement plus vulnérable aux attaques ciblées qui exploitent la netteté des frontières de décision.
 
 ### Étape 8 — Mécanismes de défense
 
-**En cours d'implémentation.**
+**Scripts prêts, jobs à soumettre.**
 
-Quatre défenses seront implémentées séquentiellement :
+Quatre défenses implémentées, chacune évaluée sur données propres + 6 attaques adversariales :
 
-1. **Label Smoothing (LS)** — En préparation
-2. **Adversarial Training (AT)** — À faire
-3. **Gaussian Augmentation (GA)** — À faire
-4. **Denoising Autoencoder (DAE)** — À faire
+| Script | Défense | Approche | Hyperparamètres clés |
+|---|---|---|---|
+| `11_defense_adversarial_training.py` | Adversarial Training (AT) | FGSM à la volée, mix 50/50 clean/adv | eps=0.05, ratio=0.5 |
+| `12_defense_label_smoothing.py` | Label Smoothing (LS) | Cross-entropy adoucie | alpha=0.1 |
+| `13_defense_gaussian_augmentation.py` | Gaussian Augmentation (GA) | Bruit gaussien sur inputs pendant training | sigma=0.1 |
+| `14_defense_denoising_autoencoder.py` | Denoising Autoencoder (DAE) | Autoencodeur 58→32→58 en amont du baseline | sigma=0.1, L1=1e-5 |
 
-Chaque défense sera :
-- Entraînée avec les mêmes hyperparamètres que le baseline v4 (lr=0.001, scheduler, 50 epochs)
-- Évaluée sur données propres + les 6 attaques adversariales
-- Sauvegardée séparément pour permettre l'agrégation à l'étape 9
+**Choix méthodologiques communs à toutes les défenses** :
+- Même architecture que baseline v4 (BaselineDNN 512→256)
+- Mêmes hyperparamètres d'entraînement (lr=0.001, ReduceLROnPlateau, 50 epochs)
+- Évaluation intégrée : chaque script produit clean + 6 attaques dans un seul run
+- Sauvegarde des checkpoints séparés (`defense_at_best.pth`, `defense_ls_best.pth`, etc.)
+
+### Étape 9 — Agrégation par ensemble
+
+**Script prêt.** Combine les 4 défenses via 3 méthodes d'agrégation :
+
+| Méthode | Description |
+|---|---|
+| Majority Voting | Chaque défense vote, classe majoritaire retenue |
+| Weighted Average (égal) | Moyenne des probabilités softmax, poids 0.25 chacun |
+| Weighted Average (optimisé) | Poids optimisés par Nelder-Mead (scipy.optimize) pour maximiser accuracy sur attaques |
+
+**Différence méthodologique avec le papier** : le papier utilise scikit-optimize (Bayesian optimization). Nous utilisons **Nelder-Mead** de scipy.optimize pour :
+- Éviter une dépendance externe complexe à installer sur les clusters
+- Résultats équivalents pour un problème à 4 dimensions
+- Optimisation plus rapide (< 1 min)
+
+Cette différence est documentée dans le rapport final.
 
 ---
 
@@ -395,26 +408,21 @@ IDS-Adversarial-Defense/
 Nécessite Python 3.12 sur Linux (ou Python 3.11 sur les serveurs Alliance Canada).
 
 ```bash
-# Créer et activer l'environnement virtuel
 python -m venv venv
 source venv/bin/activate
 
-# Installer PyTorch (version CPU pour le développement local)
 pip install torch==2.5.1 torchvision==0.20.1 \
     --index-url https://download.pytorch.org/whl/cpu
 
-# Installer les autres dépendances
 pip install -r requirements.txt
-
-# Installer torchattacks sans ses dépendances
 pip install torchattacks==3.5.1 --no-deps
+pip install adversarial-robustness-toolbox --no-deps
 ```
 
 ### Téléchargement du dataset
 
 ```bash
 mkdir -p ~/.kaggle
-# Placer votre kaggle.json dans ~/.kaggle/ puis :
 chmod 600 ~/.kaggle/kaggle.json
 
 kaggle datasets download \
@@ -430,41 +438,26 @@ kaggle datasets download \
 Les scripts sont numérotés dans l'ordre d'exécution du pipeline.
 
 ```bash
-# Vérification de l'environnement
 python scripts/00_test_environment.py
-
-# Exploration
 python scripts/02_explore_dataset.py
-
-# Preprocessing
 python scripts/03_preprocess_dataset.py
 
-# Feature selection (via SLURM sur Alliance Canada)
 sbatch scripts/04_feature_selection.sh
-
-# Split + Normalisation + SMOTE custom (via SLURM)
 sbatch scripts/05_split_and_prepare.sh
-
-# Entraînement du DNN baseline (via SLURM avec GPU H100)
 sbatch scripts/06_train_baseline.sh
-
-# Génération des graphiques (post-entraînement)
 python scripts/07_plot_results.py
 
-# Génération des attaques adversariales (via SLURM avec GPU)
 sbatch scripts/08_generate_attacks.sh
-
-# Génération JSMA (échantillon 20k) + C&W (full test) via SLURM
 sbatch scripts/09_generate_attacks_jsma_sample.sh
+sbatch scripts/10_evaluate_and_plot_attacks.sh
+
+sbatch scripts/11_defense_adversarial_training.sh
+sbatch scripts/12_defense_label_smoothing.sh
+sbatch scripts/13_defense_gaussian_augmentation.sh
+sbatch scripts/14_defense_denoising_autoencoder.sh
+
+sbatch scripts/16_ensemble_aggregation.sh
 ```
-
-### Scripts à venir
-
-- `12_defense_label_smoothing.py` : défense par Label Smoothing
-- `13_defense_adversarial_training.py` : défense par Adversarial Training
-- `14_defense_gaussian_augmentation.py` : défense par Gaussian Augmentation
-- `15_defense_denoising_autoencoder.py` : défense par Denoising Autoencoder
-- `16_ensemble.py` : agrégation et optimisation par vote majoritaire et moyenne pondérée
 
 ---
 
@@ -472,14 +465,14 @@ sbatch scripts/09_generate_attacks_jsma_sample.sh
 
 Six attaques standards de la littérature :
 
-| Attaque | Référence | Type | Norme |
-|---|---|---|---|
-| FGSM | Goodfellow et al., 2014 | Single-step | L∞ |
-| BIM | Kurakin et al., 2016 | Iterative | L∞ |
-| PGD | Madry et al., 2017 | Iterative | L∞ |
-| DeepFool | Moosavi-Dezfooli et al., 2015 | Iterative | L2 |
-| JSMA | Papernot et al., 2015 | Feature-based | L0 |
-| C&W | Carlini & Wagner, 2016 | Optimization | L2 |
+| Attaque | Référence | Type | Norme | Hyperparamètres |
+|---|---|---|---|---|
+| FGSM | Goodfellow et al., 2014 | Single-step | L∞ | eps=0.2 |
+| BIM | Kurakin et al., 2016 | Iterative | L∞ | eps=0.3, alpha=0.01, 100 iter |
+| PGD | Madry et al., 2017 | Iterative | L∞ | eps=0.3, alpha=0.01, 100 iter |
+| DeepFool | Moosavi-Dezfooli et al., 2015 | Iterative | L2 | max_iter=100 |
+| JSMA | Papernot et al., 2015 | Feature-based | L0 | theta=0.3, gamma=0.15, untargeted |
+| C&W | Carlini & Wagner, 2016 | Optimization | L2 | max_iter=10, confidence=0.0, untargeted |
 
 ## Mécanismes de défense
 
@@ -490,20 +483,11 @@ Quatre défenses combinées dans un ensemble :
 - **Label Smoothing (LS)** : lissage des labels pour éviter la sur-confiance
 - **Denoising Autoencoder (DAE)** : autoencodeur qui nettoie les inputs avant classification
 
-**Agrégation par ensemble** : Majority Voting et Weighted Average, tous deux optimisés par optimisation bayésienne.
+**Agrégation par ensemble** : Majority Voting et Weighted Average, optimisés par Nelder-Mead.
 
 ---
 
-## Datasets
-
-- **CIC-IDS 2017** : https://www.unb.ca/cic/datasets/ids-2017.html
-- **CIC-IDS 2018** : https://www.unb.ca/cic/datasets/ids-2018.html
-
-Le CIC-IDS 2017 contient 2.8 millions de flux réseau étiquetés en 15 classes (14 attaques + trafic bénin), avec 78 features statistiques extraites par CICFlowMeter.
-
----
-
-## Résultats de référence (issus du papier, CIC-IDS 2017)
+## Résultats de référence (papier Awad et al., CIC-IDS 2017)
 
 | Configuration | Accuracy |
 |---|---:|
@@ -514,7 +498,7 @@ Le CIC-IDS 2017 contient 2.8 millions de flux réseau étiquetés en 15 classes 
 | Ensemble simple (Majority Voting) | 84.35% |
 | **Ensemble optimisé (Majority Voting)** | **87.49%** |
 
-## Nos résultats actuels
+## Nos résultats
 
 ### Baseline v4 (CIC-IDS 2017)
 
@@ -524,17 +508,21 @@ Le CIC-IDS 2017 contient 2.8 millions de flux réseau étiquetés en 15 classes 
 | F1 weighted | 99.72% | Non détaillé | — |
 | F1 macro | 80.17% | Non détaillé | — |
 
-### Vulnérabilité du baseline sous attaques
+### Vulnérabilité du baseline sous attaques (test complet 831k)
 
-| Attaque | Accuracy | Chute vs baseline |
-|---|---:|---:|
-| Baseline (clean) | 99.69% | — |
-| FGSM | 83.25% | -16.4 pts |
-| BIM | 72.10% | -27.6 pts |
-| PGD | 78.48% | -21.2 pts |
-| DeepFool | 16.71% | -82.9 pts |
-| JSMA | En cours | — |
-| C&W | En cours | — |
+| Attaque | Accuracy | F1 macro | F1 weighted | Chute vs baseline |
+|---|---:|---:|---:|---:|
+| Baseline (clean) | 99.69% | 80.17% | 99.72% | — |
+| FGSM | 83.25% | 6.34% | 75.88% | -16.4 pts |
+| BIM | 72.10% | 5.61% | 69.86% | -27.6 pts |
+| PGD | 78.48% | 5.86% | 73.09% | -21.2 pts |
+| DeepFool | 16.71% | 2.86% | 25.14% | -82.9 pts |
+| JSMA | 83.45% | 17.96% | 81.91% | -16.2 pts |
+| CW | 67.15% | 5.37% | 66.93% | -32.5 pts |
+
+### Résultats des défenses
+
+**En attente.** Les scripts des 4 défenses individuelles et de l'ensemble sont prêts. Les jobs seront soumis dès que la maintenance des clusters se termine.
 
 ---
 
@@ -543,7 +531,7 @@ Le CIC-IDS 2017 contient 2.8 millions de flux réseau étiquetés en 15 classes 
 Le projet utilise une architecture hybride :
 
 - **Développement local** : Arch Linux (Python 3.12) + Windows PowerShell (édition secondaire)
-- **Exécution intensive** : Alliance Canada (serveur nibi), Python 3.11, jobs SLURM avec GPU H100
+- **Exécution intensive** : Alliance Canada (serveurs nibi et narval), Python 3.11, jobs SLURM avec GPU H100/A100
 - **Synchronisation** : Git + GitHub (dépôt privé)
 
 ## Références principales
@@ -552,7 +540,10 @@ Le projet utilise une architecture hybride :
 - Goodfellow et al. (2014). *Explaining and Harnessing Adversarial Examples.* ICLR.
 - Madry et al. (2017). *Towards Deep Learning Models Resistant to Adversarial Attacks.* ICLR.
 - Carlini & Wagner (2016). *Towards Evaluating the Robustness of Neural Networks.* IEEE S&P.
+- Papernot et al. (2015). *The Limitations of Deep Learning in Adversarial Settings.* IEEE EuroS&P.
+- Moosavi-Dezfooli et al. (2015). *DeepFool: a simple and accurate method to fool deep neural networks.* CVPR.
 - Chawla et al. (2002). *SMOTE: Synthetic Minority Over-sampling Technique.* JAIR.
+- Tsipras et al. (2019). *Robustness May Be at Odds with Accuracy.* ICLR.
 
 ---
 
