@@ -38,12 +38,14 @@ Le projet suit les 9 étapes du framework proposé par Awad et al. (2025) :
 | 1 | Collection des données | Terminée |
 | 2 | Preprocessing | Terminée |
 | 3 | Feature selection | Terminée |
-| 4 | Split train/test + Normalisation + SMOTE | Terminée |
-| 5 | Baseline DNN | Terminée |
-| 6 | Attaques adversariales | Terminée (6 attaques évaluées) |
-| 7 | Test de vulnérabilité | Terminée (intégrée à l'étape 6) |
-| 8 | Mécanismes de défense | Scripts prêts, jobs à soumettre |
+| 4 | Split train/val/test + Normalisation + SMOTE | Réécrite le 3 sept. 2026 (MinMaxScaler, vrai split validation) — à régénérer |
+| 5 | Baseline DNN | Réécrite le 3 sept. 2026 (sélection sur validation) — à réentraîner |
+| 6 | Attaques adversariales | Réécrite le 3 sept. 2026 (substitut, clip_values) — à régénérer |
+| 7 | Test de vulnérabilité | Intégrée à l'étape 6, dépend de sa régénération |
+| 8 | Mécanismes de défense | Scripts prêts, dépendent de la régénération des étapes 4-6 |
 | 9 | Agrégation par ensemble | Script prêt, dépend de l'étape 8 |
+
+**Voir la section "Correctifs méthodologiques du 3 septembre 2026" plus bas avant de lire les résultats ci-dessous : les chiffres de baseline et d'attaques actuellement documentés dans ce fichier viennent du pipeline PRÉCÉDENT (StandardScaler, pas de substitut) et sont provisoires. Ils seront remplacés dès que les scripts corrigés auront tourné sur le cluster.**
 
 ---
 
@@ -377,6 +379,105 @@ Cette différence est documentée dans le rapport final.
 
 ---
 
+## Correctifs méthodologiques du 3 septembre 2026
+
+Une relecture du pipeline a mis au jour plusieurs écarts avec le protocole
+de l'article, indépendants des choix méthodologiques déjà documentés
+(SMOTE custom, ordre split/normalisation/SMOTE). Ces écarts n'avaient pas
+été détectés parce que chaque script redéfinissait ses propres constantes
+au lieu de lire `configs/config.yaml` — deux sources de vérité qui ont
+divergé sans que ce soit visible.
+
+1. **Absence de modèle substitut (l'écart le plus important).** Les six
+   attaques étaient générées directement sur le baseline
+   (`torchattacks.FGSM(model, ...)`, `PyTorchClassifier(model=model)`),
+   c'est-à-dire en white box complet : l'attaquant disposait des vrais
+   gradients du modèle qu'il attaque. L'article place l'attaquant en
+   semi-white box via un modèle substitut (58 → 100 → 100 → 15, entraîné
+   séparément). Un modèle substitut est maintenant implémenté
+   (`src/models/substitute.py`) et utilisé par
+   `scripts/08_generate_attacks.py` comme source des attaques ; le baseline
+   ne sert plus qu'à évaluer la transférabilité des exemples générés.
+
+2. **`clip_values` non défini sur le classifieur ART.** Trois attaques
+   (FGSM, BIM, PGD, via `torchattacks`) étaient bornées dans [0,1] par un
+   clamp interne à la bibliothèque ; les trois autres (DeepFool, JSMA, C&W,
+   via ART) ne l'étaient pas. `create_art_classifier` passe désormais
+   `clip_values=(0.0, 1.0)` (`configs/config.yaml` → `dataset.clip_values`).
+
+3. **`StandardScaler` au lieu de `MinMaxScaler`.** Avec des features
+   centrées-réduites (donc en partie négatives), le clamp interne de
+   `torchattacks` (`torch.clamp(x, 0, 1)`) écrasait à zéro toutes les
+   valeurs négatives de l'échantillon lui-même, pas seulement de la
+   perturbation — pour FGSM, BIM et PGD uniquement, ce qui rendait leur
+   comportement incomparable à DeepFool/JSMA/C&W. L'article ramène les
+   features dans [0,1] ; `scripts/05_split_and_prepare.py` utilise
+   maintenant `MinMaxScaler`, cohérent avec `clip_values` ci-dessus.
+
+4. **Sélection du meilleur epoch sur le test set.** `06_train_baseline.py`
+   choisissait le checkpoint et pilotait le scheduler sur l'accuracy du
+   test, qui servait donc à la fois à choisir le modèle et à l'évaluer —
+   biais à la hausse de l'accuracy rapportée. Un vrai split de validation
+   (`dataset.val_size` dans `configs/config.yaml`) existe maintenant ; le
+   test n'est plus touché qu'une fois, pour le rapport final.
+
+5. **Paramètres d'attaque divergents de la Table 2 de l'article.** JSMA
+   utilisait `theta=0.3` (Table 2 : 0.1) et C&W `max_iter=10` (Table 2 : 9),
+   avec les autres hyperparamètres de C&W laissés aux défauts d'ART. Cause
+   racine : `configs/config.yaml` contenait déjà les bonnes valeurs mais
+   n'était lu par aucun script de calcul. `src/utils/config.py` centralise
+   maintenant le chargement (`load_config()`) et valide la cohérence de la
+   configuration avant tout calcul (scaler, clip_values, clés d'attaque
+   requises, dimensions du substitut).
+
+6. **Périmètre d'évaluation hétérogène.** JSMA tournait sur un échantillon
+   stratifié de 30 000 (`09_generate_attacks_jsma_sample.py`) pendant que
+   les cinq autres attaques tournaient sur les 831 864 échantillons du
+   test set complet — mélange non signalé dans les résultats. Ce script
+   est désactivé (il refuse de s'exécuter) ; `08_generate_attacks.py`
+   couvre maintenant les six attaques avec un périmètre unique, piloté par
+   `evaluation.scope` dans la configuration.
+
+7. **`SMOTE_STRATEGY` en dur, et un bug de `k_neighbors`.** Les plafonds
+   par classe vivaient en dur dans `05_split_and_prepare.py` et pouvaient
+   changer sans que rien ne le signale ailleurs ; ils sont maintenant dans
+   `configs/config.yaml` → `dataset.smote_strategy`. Au passage, `k_neighbors`
+   se calculait sur la classe la plus petite de tout `y_train`, y compris
+   des classes non concernées par SMOTE — une classe ultra-rare hors
+   stratégie faisait chuter `k_neighbors` pour toutes les autres. Il se
+   calcule maintenant uniquement sur les classes réellement suréchantillonnées.
+
+**Garde-fou ajouté en plus** : `src/utils/config.py` calcule une empreinte
+de configuration pour les données (`05`), le baseline (`06`) et le
+substitut/les attaques (`08`), et invalide un artefact mis en cache
+(checkpoint, `X_adv_*.pkl`) si la configuration a changé depuis sa
+génération — avec un message qui dit quelle clé a changé plutôt que deux
+hashes opaques. Ça évite de réutiliser silencieusement un vieux résultat
+après un changement de config, sans plus de cérémonie que ça.
+
+**Risque opérationnel à surveiller** : revenir aux paramètres JSMA fidèles
+à l'article (`theta=0.1, gamma=1.0`) réintroduit potentiellement le
+problème de durée qui avait motivé le détour vers `theta=0.3, gamma=0.15`
+(~12 jours estimés sur le test set complet avec le baseline). Le substitut
+est plus petit, mais rien ne garantit que cela suffise.
+`08_generate_attacks.py` imprime maintenant une estimation de durée avant
+de lancer JSMA en grandeur réelle ; si elle est trop élevée, repasser
+`evaluation.scope` à `"sample"` dans `configs/config.yaml` plutôt que de
+laisser tourner le job à l'aveugle.
+
+**Conséquence** : les résultats de baseline (99.69%) et d'attaques
+documentés plus bas dans ce fichier viennent de l'ancien pipeline et ne
+sont plus représentatifs. Le pipeline doit être ré-exécuté dans l'ordre
+05 → 06 → 08 pour produire des chiffres comparables au protocole de
+l'article. Non vérifié dans cette passe (nécessite l'environnement
+cluster complet — `sklearn`, `imblearn`, `torchattacks`, `art` ne sont pas
+installés dans l'environnement de développement local) : le comportement
+réel de `MinMaxScaler` + SMOTE, l'entraînement du substitut de bout en
+bout, et les six attaques via ART/torchattacks. Vérifié localement :
+`src/utils/config.py` charge et valide `configs/config.yaml` sans erreur,
+et `src/models/substitute.py` instancie un modèle de 17 515 paramètres
+avec les bonnes formes d'entrée/sortie.
+
 ## Structure du projet
 
 ```
@@ -448,7 +549,8 @@ sbatch scripts/06_train_baseline.sh
 python scripts/07_plot_results.py
 
 sbatch scripts/08_generate_attacks.sh
-sbatch scripts/09_generate_attacks_jsma_sample.sh
+# 09_generate_attacks_jsma_sample.sh est desactive (voir Correctifs du 3
+# septembre 2026) : ne pas le soumettre, 08 couvre desormais JSMA et C&W.
 sbatch scripts/10_evaluate_and_plot_attacks.sh
 
 sbatch scripts/11_defense_adversarial_training.sh
