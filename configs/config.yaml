@@ -1,6 +1,13 @@
 
 # ============================================================
 # Configuration globale du projet IDS Adversarial Defense
+#
+# SOURCE UNIQUE DE VERITE. Aucun hyperparametre ne doit etre
+# redefini en dur dans scripts/. Charger via :
+#     from src.utils.config import load_config
+#
+# Les valeurs des attaques suivent la Table 2 de
+# Awad et al. (2025), Sci Rep 15:14177.
 # ============================================================
 
 # ---------- Environnement ----------
@@ -16,6 +23,7 @@ paths:
   checkpoints: "results/checkpoints"
   logs: "results/logs"
   figures: "results/figures"
+  attacks: "results/attacks"
 
 # ---------- Dataset ----------
 dataset:
@@ -23,9 +31,54 @@ dataset:
   num_features: 58
   num_classes: 15
   test_size: 0.33
-  val_size: 0.15
+  # 0.05 de l'original (~126k lignes sur CIC-IDS2017), pas 0.15. Une
+  # selection d'epoch n'a pas besoin de 378k exemples de validation, et
+  # chaque point de pourcentage retire au train direct sur des classes
+  # deja ultra-rares (Heartbleed : ~11 exemples au total). 0.05 laisse le
+  # train proche du 67% du papier (~62% au lieu de 52%) tout en gardant
+  # une validation largement suffisante.
+  val_size: 0.05
 
-# ---------- Modèle DNN (baseline) ----------
+  # MinMaxScaler et non StandardScaler. L'article ramene les features
+  # dans [0,1] ("feature standardization (scaling) to limit the values
+  # between 0,1"). Avec StandardScaler, torchattacks ecrase a zero toutes
+  # les valeurs negatives via son clamp interne torch.clamp(x, 0, 1),
+  # ce qui detruit l'echantillon et neutralise FGSM/BIM/PGD.
+  scaler: "MinMaxScaler"
+
+  # Bornes du domaine, passees a ART via clip_values. Doivent correspondre
+  # a la sortie du scaler ci-dessus.
+  clip_values: [0.0, 1.0]
+
+  # Strategie SMOTE : cap par classe (cle = id de classe apres LabelEncoder,
+  # valeur = effectif cible apres SMOTE). Les classes absentes d'ici gardent
+  # leur effectif reel, inchange. Plafonner l'expansion evite la sur-
+  # generation extreme sur les classes ultra-rares : sans cap, Heartbleed
+  # (7 exemples reels dans le train a 67%) serait monte a l'effectif de
+  # BENIGN (~1.4M), soit un ratio d'expansion de 200 000x qui noie le signal
+  # reel sous des interpolations synthetiques. C'est le plus gros
+  # hyperparametre du projet hors de l'article (l'article equilibre
+  # totalement, sans discuter ce probleme) et probablement la plus grande
+  # partie de l'ecart d'accuracy avec l'article (99.69% vs 98.11%) : il
+  # vivait auparavant en dur dans scripts/05_split_and_prepare.py et
+  # n'entrait dans aucune empreinte de configuration - le modifier et
+  # regenerer les donnees ne changeait aucun hash, donc aucun artefact en
+  # aval n'etait invalide. Voir Config.data_fingerprint_data().
+  smote_strategy:
+    3: 50000    # DoS GoldenEye (etait 6,891 dans le train a 67%)
+    7: 50000    # FTP-Patator (3,974)
+    6: 50000    # DoS slowloris (3,608)
+    5: 50000    # DoS Slowhttptest (3,503)
+    11: 30000   # SSH-Patator (2,157)
+    1: 30000    # Bot (1,305)
+    12: 10000   # Web Attack Brute Force (985)
+    14: 5000    # Web Attack XSS (437)
+    9: 1000     # Infiltration (24) - cap raisonnable
+    13: 1000    # Web Attack SQL Injection (14)
+    8: 500      # Heartbleed (7) - cap tres bas car ultra-rare
+
+# ---------- Modele DNN (baseline, cible de l'evaluation) ----------
+# Table 3 de l'article : 512-256-15
 model:
   architecture: "DNN"
   hidden_layers: [512, 256]
@@ -33,42 +86,121 @@ model:
   output_activation: "softmax"
   dropout: 0.0
 
-# ---------- Entraînement ----------
+# ---------- Modele substitut (source des exemples adversariaux) ----------
+# L'article ne genere PAS les attaques sur le baseline. Il utilise un
+# substitut pour placer l'attaquant en semi-white box : architecture connue,
+# parametres d'initialisation inconnus. Generer sur le baseline revient a
+# du white box complet et rend les resultats incomparables a l'article.
+substitute:
+  input_dim: 58
+  hidden_layers: [100, 100]
+  output_dim: 15
+  activation: "relu"
+  learning_rate: 0.01
+  epochs: 30
+  batch_size: 256
+  # L'article rapporte un F1 moyen de 0.98 sur donnees propres, comparable
+  # au baseline. Critere de validation du substitut avant de generer.
+  # Compare en F1 PONDERE (weighted), pas macro : le baseline lui-meme fait
+  # ~99.7% de F1 pondere contre ~80% de F1 macro sur ce dataset a 15 classes
+  # tres desequilibrees (voir README). Un F1 macro de 0.98 serait quasi
+  # impossible a atteindre pour un reseau de 17k parametres ; le 0.98 de
+  # l'article correspond presque certainement a une moyenne ponderee.
+  f1_cible: 0.98
+
+# ---------- Entrainement du baseline ----------
+# lr=0.01 (Table 3 de l'article) produisait une instabilite claire des la
+# 2e epoch sous StandardScaler (voir README, iterations v1/v2). lr=0.001 +
+# ReduceLROnPlateau convergeait proprement dans ce regime. ATTENTION : ces
+# valeurs n'ont ete validees que sous StandardScaler (features centrees-
+# reduites). Sous MinMaxScaler (regime actuel), l'echelle des gradients
+# change, en particulier pour les features CIC-IDS a distribution tres
+# asymetrique dont la masse se concentre pres de 0 apres mise a l'echelle.
+# Ne pas presumer que lr=0.001/epochs=50 restent optimaux : regarder les
+# courbes train/val du premier reentrainement sous MinMaxScaler avant de
+# conclure, et ajuster si l'entrainement est instable ou n'a pas converge.
+#
+# La fraction de validation vit UNIQUEMENT dans dataset.val_size : il n'y a
+# plus de deuxieme "validation_split" ici. L'ancienne cle valait 0.33 et
+# designait en realite le test set, pas une validation : 06_train_baseline.py
+# selectionnait le meilleur epoch sur best_test_acc, ce qui biaise
+# l'accuracy rapportee a la hausse (le test set sert alors a choisir le
+# modele, pas seulement a l'evaluer). Desormais le choix du meilleur epoch
+# et le pas du scheduler se font sur le split de validation issu de
+# dataset.val_size ; le test set n'est touche qu'une fois, pour le rapport
+# final.
 training:
   batch_size: 128
-  epochs: 30
-  learning_rate: 0.01
+  epochs: 50
+  learning_rate: 0.001
   optimizer: "adam"
   loss: "cross_entropy"
-  validation_split: 0.33
+  model_selection_metric: "val_acc"
+  scheduler:
+    enabled: true
+    monitor: "val_loss"
+    factor: 0.5
+    patience: 5
+    min_lr: 1.0e-5
 
-# ---------- Attaques ----------
+# ---------- Attaques (Table 2 de l'article) ----------
 attacks:
   FGSM:
     eps: 0.2
     norm: "inf"
+
   BIM:
     eps: 0.3
     alpha: 0.01
     steps: 100
     norm: "inf"
+
   PGD:
     eps: 0.3
     alpha: 0.01
     steps: 100
     norm: "inf"
-  CW:
-    max_iter: 9
-    norm: "l2"
+
   DeepFool:
-    eps: 1.0e-6
+    # Dans ART, 'epsilon' est le facteur de depassement (overshoot),
+    # pas une borne de perturbation. La valeur 1e-6 de la Table 2
+    # correspond bien a ce parametre.
+    epsilon: 1.0e-6
     max_iter: 100
     norm: "l2"
+
   JSMA:
+    # Table 2 : 0.1. L'ancienne version du script utilisait 0.3,
+    # soit une perturbation par feature trois fois plus forte.
     theta: 0.1
+    # Fraction maximale de features modifiables. L'article ne la documente
+    # pas ; 1.0 laisse l'attaque libre plutot que de la brider a 0.15.
     gamma: 1.0
 
-# ---------- Défenses ----------
+  CW:
+    # Table 2 : 9 iterations.
+    max_iter: 9
+    # Les quatre parametres suivants etaient laisses aux defauts d'ART.
+    # Ils sont maintenant explicites : subir un defaut de bibliotheque
+    # n'est pas un choix experimental documentable.
+    confidence: 0.0
+    binary_search_steps: 10
+    initial_const: 0.01
+    learning_rate: 0.01
+    norm: "l2"
+
+# ---------- Perimetre d'evaluation des attaques ----------
+evaluation:
+  # "full" : tout le test set. "sample" : echantillon stratifie.
+  # Les six attaques doivent partager le meme perimetre, sinon le tableau
+  # de resultats melange des tailles d'echantillon incomparables.
+  # JSMA tournait sur 30 000 alors que les cinq autres tournaient sur
+  # 831 864, ce qui n'etait signale nulle part.
+  scope: "full"
+  sample_size: 30000
+  batch_size: 512
+
+# ---------- Defenses ----------
 defenses:
   AdversarialTraining:
     attack: "FGSM"
