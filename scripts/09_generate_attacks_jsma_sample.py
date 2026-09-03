@@ -1,19 +1,47 @@
 """
-Génération JSMA (échantillon stratifié) et C&W (full test set).
+DESACTIVE — remplace par 08_generate_attacks.py.
 
-Complémentaire à 08_generate_attacks.py. Génère :
-  - JSMA sur un échantillon stratifié (30 000 exemples par défaut)
-  - C&W sur le test set complet
+Pourquoi ce script est retire du pipeline
+------------------------------------------
+1. Ses sorties (X_adv_jsma_sample30k.pkl, y_jsma_sample30k.pkl) ne sont lues
+   par aucun autre script. 10_evaluate_and_plot_attacks.py et les scripts de
+   defense (11-14) chargent tous X_adv_jsma.pkl et X_adv_cw.pkl produits par
+   08 — jamais les fichiers _sample30k. Le C&W genere ici est un doublon pur
+   du C&W de 08 (memes parametres perimes : max_iter=10 au lieu de 9).
+2. Il generait directement sur le baseline (PyTorchClassifier(model=model)),
+   sans modele substitut : white box complet, incoherent avec le protocole
+   semi-white box de l'article et avec 08_generate_attacks.py qui utilise
+   desormais un substitut (src/models/substitute.py).
+3. Il ne bornait pas le classifieur ART avec clip_values.
+4. Son JSMA tournait sur 30 000 echantillons pendant que les autres attaques
+   de 08 tournaient sur les 831 864 du test set complet, sans que ce soit
+   signale : un tableau de resultats comparant des perimetres differents
+   n'est pas exploitable tel quel.
 
-Attaques configurées en mode untargeted (y=None) : le but est de faire
-prédire n'importe quelle classe incorrecte au modèle, pas une classe cible
-précise. Passer les vrais labels rendrait l'attaque triviale puisque le
-modèle prédit déjà ces classes correctement.
+08_generate_attacks.py couvre desormais JSMA et C&W (comme les 4 autres
+attaques) avec un perimetre unique et partage, pilote par
+configs/config.yaml -> evaluation.scope ("full" ou "sample"). Si le
+perimetre complet s'avere trop lent pour JSMA (voir l'avertissement de
+duree ajoute dans 08), la reponse est de passer evaluation.scope a "sample"
+dans la configuration — qui s'applique alors identiquement aux six attaques
+— pas de faire revivre ce script.
 
-Note technique : patch np.product pour compatibilité NumPy 2.x avec ART 1.18.
+Le corps du script est laisse tel quel ci-dessous pour reference et
+recuperation eventuelle de morceaux de code, mais main() refuse de
+s'executer pour eviter de regenerer silencieusement des resultats
+incoherents avec 08.
 """
 
 import sys
+
+if __name__ == "__main__":
+    raise SystemExit(
+        "09_generate_attacks_jsma_sample.py est desactive : voir l'en-tete du "
+        "fichier. Utiliser scripts/08_generate_attacks.py, dont le perimetre "
+        "d'evaluation (evaluation.scope dans configs/config.yaml) couvre "
+        "desormais JSMA et C&W au meme titre que les 4 autres attaques."
+    )
+
 import time
 from datetime import datetime
 from pathlib import Path

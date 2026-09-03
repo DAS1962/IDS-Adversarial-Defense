@@ -1,4 +1,8 @@
 #!/bin/bash
+# DESACTIVE : 09_generate_attacks_jsma_sample.py refuse maintenant de
+# s'executer (voir l'en-tete du .py). Ne pas soumettre ce job : il
+# consommerait une allocation cluster pour un script qui s'arrete tout de
+# suite. Utiliser scripts/08_generate_attacks.sh a la place.
 #SBATCH --job-name=jsma_cw_sample
 #SBATCH --account=def-smoolak
 #SBATCH --ntasks=1
