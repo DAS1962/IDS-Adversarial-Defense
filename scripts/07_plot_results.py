@@ -124,12 +124,13 @@ def plot_f1_per_class(results, output_path):
     label_encoder = joblib.load(DATA_DIR / "label_encoder.pkl")
 
     f1_scores = f1_score(labels, predictions, average=None, zero_division=0)
-    class_names = [str(c) for c in label_encoder.classes_]
+    class_names = [str(c).replace("�", "-").strip() for c in label_encoder.classes_]
 
     # Trier par F1 decroissant pour lisibilite
+    supports = np.bincount(labels, minlength=len(class_names))
     sorted_idx = np.argsort(f1_scores)[::-1]
     f1_sorted = f1_scores[sorted_idx] * 100
-    names_sorted = [class_names[i] for i in sorted_idx]
+    names_sorted = [f"{class_names[i]} (n={supports[i]:,})" for i in sorted_idx]
 
     fig, ax = plt.subplots(figsize=(12, 6))
     colors = ['#2E7D32' if f > 80 else '#F9A825' if f > 40 else '#C62828' for f in f1_sorted]
@@ -152,7 +153,7 @@ def plot_confusion_matrix(results, output_path):
     """Matrice de confusion en heatmap (normalisee par ligne)."""
     cm = results["confusion_matrix"]
     label_encoder = joblib.load(DATA_DIR / "label_encoder.pkl")
-    class_names = [str(c) for c in label_encoder.classes_]
+    class_names = [str(c).replace("�", "-").strip() for c in label_encoder.classes_]
 
     # Normaliser par ligne pour lisibilite (proportion des predictions par vraie classe)
     cm_normalized = cm.astype('float') / cm.sum(axis=1, keepdims=True)
