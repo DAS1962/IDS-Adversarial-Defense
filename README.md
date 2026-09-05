@@ -38,14 +38,18 @@ Le projet suit les 9 étapes du framework proposé par Awad et al. (2025) :
 | 1 | Collection des données | Terminée |
 | 2 | Preprocessing | Terminée |
 | 3 | Feature selection | Terminée |
-| 4 | Split train/val/test + Normalisation + SMOTE | Réécrite le 3 sept. 2026 (MinMaxScaler, vrai split validation) — à régénérer |
-| 5 | Baseline DNN | Réécrite le 3 sept. 2026 (sélection sur validation) — à réentraîner |
-| 6 | Attaques adversariales | Réécrite le 3 sept. 2026 (substitut, clip_values) — à régénérer |
+| 4 | Split train/val/test + Normalisation + SMOTE | **Régénérée le 5 sept. 2026** (MinMaxScaler, vrai split validation) |
+| 5 | Baseline DNN | **Réentraînée le 5 sept. 2026** (v5, 100 epochs, sélection sur validation) |
+| 6 | Attaques adversariales | Réécrite (substitut, clip_values) — **régénération en cours** |
 | 7 | Test de vulnérabilité | Intégrée à l'étape 6, dépend de sa régénération |
-| 8 | Mécanismes de défense | Scripts prêts, dépendent de la régénération des étapes 4-6 |
+| 8 | Mécanismes de défense | Scripts prêts, dépendent de l'étape 6 |
 | 9 | Agrégation par ensemble | Script prêt, dépend de l'étape 8 |
 
-**Voir la section "Correctifs méthodologiques du 3 septembre 2026" plus bas avant de lire les résultats ci-dessous : les chiffres de baseline et d'attaques actuellement documentés dans ce fichier viennent du pipeline PRÉCÉDENT (StandardScaler, pas de substitut) et sont provisoires. Ils seront remplacés dès que les scripts corrigés auront tourné sur le cluster.**
+> **Les résultats d'attaques (étapes 6-7) documentés dans ce fichier viennent
+> encore du pipeline précédent** (white box sans substitut, sans `clip_values`).
+> Ils sont marqués comme provisoires et seront remplacés dès que
+> `08_generate_attacks.py` aura tourné sur le pipeline corrigé. Les résultats
+> de baseline (étapes 4-5), eux, sont à jour.
 
 ---
 
@@ -71,6 +75,12 @@ Nettoyage des données brutes en 4 opérations :
 **Résultat** : dataset propre de **2 520 798 lignes × 79 colonnes**, sauvegardé en format pickle (`data/processed/cicids2017_clean.pkl`, 1.5 GB).
 
 **Note méthodologique** : la suppression des doublons n'est pas explicitement documentée dans le papier Awad et al. Cette décision peut expliquer des écarts potentiels avec leurs résultats. C'est un choix conservateur pour éviter le data leakage entre train et test.
+
+**Note technique** : les libellés de classes issus des CSV contiennent un caractère
+mal encodé dans les trois classes `Web Attack – *` (tiret cadratin lu comme
+caractère de remplacement). Les scripts de tracé le nettoient à l'affichage
+plutôt que de modifier le `label_encoder`, qui doit rester identique à celui
+utilisé pour l'entraînement.
 
 ### Étape 3 — Feature selection
 
@@ -109,35 +119,59 @@ Sélection des 58 features les plus discriminantes via **Random Forest importanc
 - Random Forest ne gère pas les features fortement corrélées : plusieurs paires du top 10 mesurent des choses similaires (ex: `Variance` et `Std`). Le papier n'applique pas de pré-filtrage sur les corrélations, nous non plus.
 - Dataset réduit sauvegardé : `data/processed/cicids2017_selected.pkl` (1.15 GB, 59 colonnes)
 
-### Étape 4 — Split train/test + Normalisation + SMOTE
+### Étape 4 — Split train/val/test + Normalisation + SMOTE
 
-Cette étape combine trois opérations dans un ordre méthodologiquement crucial pour éviter le data leakage.
+Cette étape a connu deux versions. La première (août 2026) utilisait
+`StandardScaler` et ne produisait qu'un split train/test. La seconde
+(5 septembre 2026) corrige les deux points ; voir « Correctifs
+méthodologiques » pour le raisonnement.
 
-**Ordre d'exécution** :
-1. Split stratifié train/test (67/33)
-2. Normalisation avec StandardScaler (fit sur train uniquement, transform sur train et test)
-3. SMOTE sur le train uniquement (avec stratégie custom)
+#### Version actuelle
+
+**Ordre d'exécution** (crucial pour éviter le data leakage) :
+1. Split stratifié train/test, puis train/validation prélevé sur le reste
+2. Normalisation `MinMaxScaler` (fit sur train uniquement, transform sur les trois)
+3. Bornage explicite de val et test dans [0,1]
+4. SMOTE sur le train uniquement, avec stratégie custom (cap par classe)
 
 **Résultats du split** :
 
 | Split | Nombre de lignes | Pourcentage |
 |---|---:|---:|
-| Train | 1 688 934 | 67.0% |
+| Train | 1 562 894 | 62.0% |
+| Validation | 126 040 | 5.0% |
 | Test | 831 864 | 33.0% |
 
-Les 15 classes sont préservées dans les deux splits grâce à la stratification.
+`val_size` est fixé à 0.05 et non 0.15 : une sélection d'epoch n'a pas besoin de
+378 000 exemples de validation, et chaque point retiré au train pèse sur des
+classes déjà ultra-rares (Heartbleed n'a que 6 exemples dans le train).
 
-**Résultats de la normalisation** :
-- Train : `mean = 0.0000`, `std = 1.0000` (par construction)
-- Test : `mean = -0.0001`, `std = 1.1645` (écart normal, confirme l'absence de data leakage)
+**Débordement du domaine après normalisation** :
+
+`MinMaxScaler.transform()` ne garantit pas que val et test tombent dans
+l'intervalle appris sur le train. Le script compte et rapporte les valeurs
+hors domaine avant de les borner :
+
+| Split | Valeurs hors [0,1] | Proportion | Dépassement max |
+|---|---:|---:|---:|
+| Train | 1 / 90 647 852 | 0.0000% | 0.0000 |
+| Validation | 2 / 7 310 320 | 0.0000% | 0.0377 |
+| Test | 55 / 48 248 112 | 0.0001% | 4.5568 |
+
+**Interprétation** : le dépassement est réel en amplitude (jusqu'à 4.56 sur le
+test, donc bien au-delà d'un « léger débordement ») mais négligeable en
+prévalence — 55 valeurs sur 48 millions. Le bornage reste nécessaire pour
+garantir que la référence propre et les échantillons adversariaux portent sur
+le même domaine d'entrée, mais il ne change pas les résultats de façon
+mesurable. C'est le passage à `MinMaxScaler` lui-même qui compte, pas le clip.
 
 #### SMOTE : évolution de la stratégie
 
-Deux versions de SMOTE ont été implémentées et comparées.
+Deux versions ont été implémentées et comparées.
 
 **Version initiale — équilibrage total (défaut d'imbalanced-learn)** :
 
-Toutes les classes montées au niveau de la classe majoritaire (BENIGN à 1 403 688) :
+Toutes les classes montées au niveau de la majoritaire (BENIGN) :
 
 | Classe | Avant | Après | Ratio d'expansion |
 |---|---:|---:|---:|
@@ -146,359 +180,463 @@ Toutes les classes montées au niveau de la classe majoritaire (BENIGN à 1 403 
 | Heartbleed | 7 | 1 403 688 | **200 527×** |
 | Web Attack SQL | 14 | 1 403 688 | 100 263× |
 
-**Problèmes identifiés** :
-- Dataset train de 21M lignes (train × 12)
-- 19M exemples synthétiques créés
-- Ratio d'expansion extrême sur classes ultra-rares (200 000×) → bruit
-- Modèle sur-apprend les interpolations synthétiques
+**Problèmes identifiés** : train de 21M lignes, 19M exemples synthétiques,
+ratios d'expansion extrêmes sur les classes ultra-rares, modèle qui
+sur-apprend les interpolations.
 
-**Version finale — stratégie custom avec cap par classe** :
+**Version retenue — cap par classe** :
 
-Chaque classe atteint un plafond raisonnable proportionnel au nombre d'exemples réels :
+Les plafonds vivent maintenant dans `configs/config.yaml` →
+`dataset.smote_strategy`, plus en dur dans le script. Effectifs du split
+actuel :
 
-| Classe | Avant | Après | Ratio d'expansion |
+| Classe | Avant | Après | Ratio |
 |---|---:|---:|---:|
-| BENIGN | 1 403 688 | 1 403 688 | 1× (inchangé) |
-| DoS Hulk | 115 807 | 115 807 | 1× (inchangé) |
-| DDoS | 85 769 | 85 769 | 1× (inchangé) |
-| PortScan | 60 765 | 60 765 | 1× (inchangé) |
-| DoS GoldenEye | 6 891 | 50 000 | 7× |
-| FTP-Patator | 3 974 | 50 000 | 13× |
-| DoS slowloris | 3 608 | 50 000 | 14× |
-| DoS Slowhttptest | 3 503 | 50 000 | 14× |
-| SSH-Patator | 2 157 | 30 000 | 14× |
-| Bot | 1 305 | 30 000 | 23× |
-| Web Attack Brute Force | 985 | 10 000 | 10× |
-| Web Attack XSS | 437 | 5 000 | 11× |
-| Infiltration | 24 | 1 000 | 42× |
-| Web Attack SQL | 14 | 1 000 | 71× |
-| Heartbleed | 7 | 500 | 71× |
+| BENIGN | 1 298 935 | 1 298 935 | 1× (inchangé) |
+| DoS Hulk | 107 165 | 107 165 | 1× (inchangé) |
+| DDoS | 79 368 | 79 368 | 1× (inchangé) |
+| PortScan | 56 230 | 56 230 | 1× (inchangé) |
+| DoS GoldenEye | 6 377 | 50 000 | 8× |
+| FTP-Patator | 3 677 | 50 000 | 14× |
+| DoS slowloris | 3 339 | 50 000 | 15× |
+| DoS Slowhttptest | 3 242 | 50 000 | 15× |
+| SSH-Patator | 1 996 | 30 000 | 15× |
+| Bot | 1 208 | 30 000 | 25× |
+| Web Attack Brute Force | 912 | 10 000 | 11× |
+| Web Attack XSS | 404 | 5 000 | 12× |
+| Infiltration | 22 | 1 000 | 45× |
+| Web Attack SQL Injection | 13 | 1 000 | 77× |
+| Heartbleed | 6 | 500 | 83× |
 
-**Résultats de la stratégie custom** :
-- Train final : **1 943 529 lignes** (au lieu de 21M)
-- **10× moins de données** que la version équilibrage total
-- Ratios d'expansion plafonnés à 71× (au lieu de 200 000×)
-- Représentation raisonnable des classes minoritaires sans sur-génération bruitée
+**Résultat** : train final de **1 819 198 lignes**, soit 256 304 exemples
+synthétiques ajoutés (expansion globale 1.16×), contre 21M pour l'équilibrage
+total.
 
-**Livrables** (version finale) :
-- `X_train.pkl` : 0.9 GB (features train après SMOTE custom et scaling)
-- `X_test.pkl` : 375 MB (features test après scaling, sans SMOTE)
-- `y_train.pkl` : ~15 MB (labels train)
-- `y_test.pkl` : 19 MB (labels test)
-- `scaler.pkl` : 3.3 KB (StandardScaler entraîné, sauvegardé pour usage futur)
+**Point de vigilance** : `k_neighbors` vaut 5, et Heartbleed n'a que 6 exemples
+réels dans le train — soit exactement le minimum requis par SMOTE
+(`k_neighbors + 1`). Un exemple de moins et l'étape échouerait. Le script
+prévoit un repli (filtrage des classes à moins de 2 exemples, avertissement
+explicite), mais la marge est d'un seul échantillon.
 
-**Notes méthodologiques critiques** :
+**Livrables** :
 
-1. **Ordre des opérations** : le papier ne détaille pas explicitement l'ordre exact (split, normalisation, SMOTE). Nous avons appliqué l'ordre méthodologiquement correct pour éviter le data leakage. Toute normalisation ou SMOTE appliquée avant le split contaminerait les statistiques du test dans le train.
+| Fichier | Taille |
+|---|---:|
+| `X_train.pkl` | 805.0 MB |
+| `X_val.pkl` | 56.7 MB |
+| `X_test.pkl` | 374.5 MB |
+| `y_train.pkl` | 13.9 MB |
+| `y_val.pkl` | 1.0 MB |
+| `y_test.pkl` | 6.3 MB |
+| `scaler.pkl` | 4.3 KB |
+| `data_fingerprint.json` | empreinte de configuration |
 
-2. **Le paramètre `n_jobs` de SMOTE** a été supprimé dans `imbalanced-learn` version 0.14+. Ne pas l'utiliser sur des versions récentes de la librairie.
+**Notes méthodologiques** :
 
-3. **Stratégie SMOTE custom** : le papier applique SMOTE avec équilibrage total sans discuter les problèmes que cela pose sur les classes ultra-rares (Heartbleed avec 7 exemples réels → 1.4M synthétiques). Notre stratégie avec cap par classe est une amélioration méthodologique justifiée par la littérature qui recommande au minimum 100 exemples réels par classe pour SMOTE. Ce choix permet un meilleur compromis entre représentation des classes rares et fidélité statistique.
+1. **Ordre des opérations** : le papier ne détaille pas l'ordre exact. Nous
+   appliquons l'ordre méthodologiquement correct — toute normalisation ou
+   SMOTE appliquée avant le split contaminerait les statistiques du test.
 
-4. **Test std = 1.1645** : le fait que la standardisation du test ne donne pas exactement `std = 1.0` (comme le train) est **normal et souhaitable**. Une std exactement égale à 1.0 sur le test signalerait un data leakage. L'écart observé (16%) confirme l'indépendance des deux splits.
+2. **Le paramètre `n_jobs` de SMOTE** a été supprimé dans `imbalanced-learn`
+   0.14+. Ne pas l'utiliser sur les versions récentes.
+
+3. **Stratégie SMOTE custom** : le papier équilibre totalement sans discuter
+   le problème des classes ultra-rares. Le cap par classe est une déviation
+   assumée, justifiée par la littérature qui recommande au minimum 100
+   exemples réels par classe pour SMOTE. C'est probablement la principale
+   cause de l'écart d'accuracy avec le papier.
+
+4. **Reproductibilité inter-cluster** : le script a été exécuté sur nibi et
+   narval à partir du même `cicids2017_selected.pkl`, et produit exactement
+   les mêmes effectifs, les mêmes comptages hors domaine et la même empreinte
+   de configuration (`cd8cbf56a4206ed7`). Cela valide le déterminisme du code
+   et de la configuration entre machines, pas celui du pipeline en amont
+   (étapes 3 et 4), qui n'a pas été rejoué indépendamment.
 
 ### Étape 5 — Entraînement du DNN baseline
 
-Reproduction et amélioration itérative du DNN baseline décrit dans le papier.
-
-**Architecture** :
+**Architecture** (identique dans toutes les versions) :
 - Input : 58 features → Dense(512) + ReLU → Dense(256) + ReLU → Dense(15)
 - **165 391 paramètres**
-- Softmax implicite via CrossEntropyLoss de PyTorch
+- Softmax implicite via `CrossEntropyLoss` de PyTorch
 
-**Hyperparamètres finaux** :
+#### Cheminement : cinq versions successives
+
+Le baseline a été entraîné cinq fois. Les quatre premières explorent les
+hyperparamètres sous le pipeline initial ; la cinquième reprend tout sous le
+pipeline corrigé.
+
+**v1 — Fidèle au papier** (`baseline_v1_lr_fixe.pth`)
+`lr=0.01` fixe, 30 epochs, StandardScaler.
+Accuracy 90.69 %, F1 macro 47.13 %.
+*Problème* : instabilité franche, pic à l'epoch 2 puis dégradation. Le
+learning rate de la Table 3 est trop élevé pour cette architecture sur ce
+jeu de données.
+
+**v2 — Scheduler agressif** (`baseline_v2_scheduler.pth`)
+`lr=0.01`, ReduceLROnPlateau avec `factor=0.1, patience=2`.
+Accuracy 95.59 %, F1 macro 44.66 %.
+*Problème* : le scheduler compense mal un lr initial trop grand et finit par
+le faire descendre jusqu'à 0.000000. L'accuracy monte mais le F1 macro se
+dégrade encore : les classes minoritaires sont sacrifiées.
+
+**v3 — SMOTE custom + scheduler ajusté** (`baseline_v3_final.pth`)
+`lr=0.001`, `factor=0.5, patience=5`, SMOTE avec cap par classe.
+Accuracy 99.60 %, F1 macro 78.15 %. Durée réduite à 12 minutes.
+*Enseignement* : c'est le passage de l'équilibrage total au cap par classe qui
+débloque le F1 macro (+33 points), pas le learning rate seul.
+
+**v4 — Extension à 50 epochs** (`baseline_v4_final.pth`)
+Mêmes hyperparamètres que v3, 50 epochs.
+Accuracy 99.69 %, F1 macro 80.17 %, F1 weighted 99.72 %.
+*Limite découverte plus tard* : le meilleur epoch était sélectionné sur
+l'accuracy du **test set**, qui servait donc à la fois à choisir le modèle et
+à l'évaluer. Le chiffre de 99.69 % était donc optimiste par construction.
+
+**v5 — Pipeline corrigé** (`baseline_best.pth`)
+MinMaxScaler, vrai split de validation, sélection sur `val_acc`, 100 epochs.
+Accuracy 99.79 %, F1 macro 84.11 %, F1 weighted 99.79 %.
+
+> **Nomenclature** : les checkpoints v1 à v4 sont conservés dans
+> `results/checkpoints/` à titre de trace des itérations. Le modèle courant
+> est `baseline_best.pth`, écrit et revalidé par empreinte de configuration ;
+> il n'y a pas de fichier `baseline_v5_*.pth`, la numérotation par version
+> ayant été remplacée par le mécanisme d'empreintes.
+
+#### v5 en détail
+
+**Hyperparamètres** :
 
 | Paramètre | Valeur | Choix |
 |---|---|---|
-| Learning rate initial | 0.001 | Ajusté depuis 0.01 du papier |
-| Scheduler | ReduceLROnPlateau | factor=0.5, patience=5, min_lr=1e-5 |
+| Learning rate initial | 0.001 | Ajusté depuis 0.01 du papier (v1/v2) |
+| Scheduler | ReduceLROnPlateau | factor=0.5, patience=5, min_lr=1e-5, sur `val_loss` |
 | Optimizer | Adam | Comme le papier |
 | Loss | CrossEntropyLoss | Comme le papier |
 | Batch size | 128 | Comme le papier |
-| Epochs | 50 | Étendu depuis 30 pour convergence |
+| Epochs | 100 | Étendu depuis 50 (voir ci-dessous) |
+| Sélection du modèle | `val_acc` | Sur validation, jamais sur test |
 | Random state | 42 | Reproductibilité |
 
-**Environnement d'exécution** :
-- Alliance Canada nibi
-- GPU NVIDIA H100 80GB via SLURM
-- Durée totale : environ 20 minutes
+**Environnement d'exécution** : Alliance Canada narval, GPU NVIDIA A100-SXM4-40GB
+via SLURM. Durée totale : **37 minutes** (21.8 s/epoch en moyenne).
 
-#### Itérations et raisonnement méthodologique
+**Pourquoi 100 epochs.** Un premier réentraînement du pipeline corrigé à
+50 epochs donnait 99.689 % d'accuracy et 81.83 % de F1 macro. Les courbes
+montraient que `val_loss` descendait encore et que `val_acc` progressait
+toujours à l'epoch 50 : le modèle n'avait pas convergé. La « convergence »
+annoncée pour v4 reposait sur la stagnation de `test_acc`, une métrique qui
+n'aurait pas dû être surveillée.
 
-Quatre versions successives du baseline ont été entraînées pour identifier la configuration optimale.
+À 100 epochs, le scheduler se déclenche quatre fois :
 
-**Version 1 — Fidèle au papier (lr=0.01 fixe, 30 epochs)** :
-- Accuracy : 90.69%, F1 macro : 47.13%
-- Problème : instabilité, pic à epoch 2 puis dégradation
+| Epoch | Learning rate |
+|---:|---:|
+| 1 → 32 | 1.0e-3 |
+| 33 → 62 | 5.0e-4 |
+| 64 → 70 | 2.5e-4 |
+| 71 → 91 | 1.25e-4 |
+| 92 → 100 | 6.3e-5 |
 
-**Version 2 — Scheduler agressif (lr=0.01, factor=0.1, patience=2)** :
-- Accuracy : 95.59%, F1 macro : 44.66%
-- Problème : lr descend jusqu'à 0.000000
+Le plateau est atteint vers l'epoch 81. Entre les epochs 92 et 100,
+`train_loss` reste bloqué à 0.0113-0.0114 et `val_acc` oscille entre 0.9976 et
+0.9979 sans tendance. Le meilleur epoch est le 98 (`val_acc` = 0.9979).
+Aucun surapprentissage : `val_loss` finit à 0.0093 sans jamais remonter, et la
+courbe de validation reste sous celle d'entraînement du début à la fin.
 
-**Version 3 — SMOTE custom + scheduler ajusté (lr=0.001, factor=0.5, patience=5)** :
-- Accuracy : 99.60%, F1 macro : 78.15%
-- Durée réduite à 12 minutes
+**Gain apporté par le passage de 50 à 100 epochs** :
 
-**Version 4 (finale) — Extension à 50 epochs** :
-- Accuracy : 99.69%, F1 macro : 80.17%, F1 weighted : 99.72%
-- Convergence confirmée
+| Métrique | 50 epochs | 100 epochs | Écart |
+|---|---:|---:|---:|
+| Accuracy | 99.689% | **99.789%** | +0.10 |
+| F1 macro | 81.83% | **84.11%** | +2.28 |
+| F1 weighted | 99.694% | **99.788%** | +0.09 |
 
-#### Résultats finaux (baseline v4)
+#### Résultats finaux (baseline v5)
 
-**Métriques globales** :
-
-| Métrique | Baseline v4 | Papier Awad et al. |
+| Métrique | Baseline v5 | Papier Awad et al. |
 |---|---:|---:|
-| Accuracy | **99.69%** | 98.11% |
-| F1 macro | 80.17% | Non détaillé |
-| F1 weighted | 99.72% | Non détaillé |
+| Accuracy | **99.79%** | 98.11% |
+| F1 macro | 84.11% | Non détaillé |
+| F1 weighted | 99.79% | Non détaillé |
 
-**Performance par classe (extrait)** :
+**Performance par classe** :
 
 | Classe | Precision | Recall | F1-score | Support |
 |---|---:|---:|---:|---:|
-| BENIGN | 99.93% | 99.74% | 99.84% | 691 369 |
-| DDoS | 99.95% | 99.96% | 99.95% | 42 245 |
-| DoS Hulk | 99.86% | 99.38% | 99.62% | 57 039 |
-| DoS GoldenEye | 99.11% | 98.59% | 98.85% | 3 395 |
-| DoS slowloris | 98.88% | 99.10% | 98.99% | 1 777 |
-| DoS Slowhttptest | 91.57% | 99.48% | 95.36% | 1 725 |
-| FTP-Patator | 99.85% | 99.59% | 99.72% | 1 957 |
-| SSH-Patator | 90.21% | 98.96% | 94.39% | 1 062 |
-| PortScan | 98.93% | 99.90% | 99.41% | 29 929 |
-| Web Attack Brute Force | 68.03% | 96.08% | 79.66% | 485 |
-| Bot | 36.01% | 94.87% | 52.20% | 643 |
-| Heartbleed | 100.00% | 75.00% | 85.71% | 4 |
-| Infiltration | 75.00% | 75.00% | 75.00% | 12 |
-| Web Attack XSS | 73.33% | 5.12% | 9.57% | 215 |
-| Web Attack SQL Injection | 14.29% | 14.29% | 14.29% | 7 |
+| BENIGN | 99.94% | 99.84% | 99.89% | 691 369 |
+| DDoS | 99.93% | 99.98% | 99.96% | 42 245 |
+| DoS Hulk | 99.65% | 99.44% | 99.55% | 57 039 |
+| PortScan | 98.91% | 99.90% | 99.40% | 29 929 |
+| FTP-Patator | 99.95% | 99.74% | 99.85% | 1 957 |
+| DoS slowloris | 99.44% | 99.10% | 99.27% | 1 777 |
+| DoS GoldenEye | 99.26% | 98.73% | 99.00% | 3 395 |
+| DoS Slowhttptest | 97.78% | 99.54% | 98.65% | 1 725 |
+| SSH-Patator | 94.61% | 99.15% | 96.83% | 1 062 |
+| Web Attack Brute Force | 69.21% | 99.18% | 81.53% | 485 |
+| Bot | 60.25% | 97.82% | 74.57% | 643 |
+| Infiltration | 64.29% | 75.00% | 69.23% | 12 |
+| Web Attack SQL Injection | 23.53% | 57.14% | 33.33% | 7 |
+| Web Attack XSS | 44.83% | 6.05% | 10.66% | 215 |
+| Heartbleed | 100.00% | 100.00% | 100.00% | 4 |
 
-**Notes méthodologiques importantes** :
+**Évolution du F1 macro à travers les versions** :
 
-1. **Écart avec le papier** : nous obtenons 99.69% contre 98.11% pour le papier. Cet écart favorable (+1.58 points) s'explique probablement par la stratégie SMOTE custom qui réduit le bruit d'interpolation, et par l'extension à 50 epochs.
+| Version | Accuracy | F1 macro | Changement principal |
+|---|---:|---:|---|
+| v1 | 90.69% | 47.13% | Fidèle au papier (lr=0.01, 30 ep) |
+| v2 | 95.59% | 44.66% | Scheduler agressif |
+| v3 | 99.60% | 78.15% | SMOTE custom + lr=0.001 |
+| v4 | 99.69% | 80.17% | 50 epochs |
+| **v5** | **99.79%** | **84.11%** | Pipeline corrigé + 100 epochs |
 
-2. **Le F1 macro reste bas (80%) malgré la haute accuracy** : cela révèle que certaines classes ultra-rares (Web Attack XSS, Web Attack SQL) restent difficiles à apprendre correctement. Le papier ne détaille pas de F1 macro, ce qui empêche la comparaison directe.
+**Notes méthodologiques** :
 
-3. **Learning rate initial** : passé de 0.01 (papier) à 0.001 après analyse des courbes de la v1 qui montraient une instabilité claire.
+1. **Écart avec le papier** : 99.79 % contre 98.11 %, soit +1.68 point. Cet
+   écart s'explique principalement par la stratégie SMOTE custom, qui réduit
+   le bruit d'interpolation par rapport à l'équilibrage total du papier, et
+   par l'extension à 100 epochs. Ce chiffre est maintenant obtenu sans que le
+   test set ait servi à la sélection du modèle, contrairement à v4.
 
-4. **Extension à 50 epochs** : décision méthodologique justifiée par l'observation que le modèle progressait encore à l'epoch 30. La convergence est prouvée par la stagnation de test_acc à 99.69% sur les 5 dernières epochs.
+2. **Le biais de sélection de v4 était négligeable en pratique** : v4 donnait
+   99.69 % avec sélection sur test, et le pipeline corrigé donne 99.689 % à
+   nombre d'epochs égal. La correction était nécessaire pour la validité du
+   protocole, pas parce qu'elle changeait le résultat.
+
+3. **Heartbleed à 100 % n'a aucune signification statistique** : 4 échantillons
+   dans le test. Idem pour SQL Injection (7) et Infiltration (12). Les figures
+   affichent le support entre parenthèses pour éviter cette lecture erronée.
+
+4. **Web Attack XSS reste la classe la plus problématique** (F1 10.66 %). La
+   matrice de confusion montre que 93 % de ses échantillons sont classés en
+   `Web Attack - Brute Force`, et non en trafic bénin : le modèle détecte bien
+   une attaque web mais ne discrimine pas entre les deux. Les 58 features de
+   flux ne capturent probablement pas ce qui les distingue — c'est une limite
+   du jeu de données, pas du modèle.
+
+5. **Bot a une précision faible pour un rappel élevé** (60 % / 98 %) : le
+   modèle sur-prédit cette classe. Effet plausible de l'expansion SMOTE de
+   1 208 à 30 000 exemples.
+
+**Figures produites** (`results/figures/final_baseline_training_20260905_154435_*`) :
+courbes d'apprentissage, évolution du learning rate, métriques globales,
+F1 par classe avec support, matrice de confusion normalisée avec support.
 
 ### Étape 6 — Génération des attaques adversariales
 
-Six attaques adversariales implémentées et évaluées sur le baseline v4.
+**Régénération en cours.** Le script `08_generate_attacks.py` a été réécrit
+(modèle substitut, `clip_values`, périmètre unifié, paramètres lus depuis la
+configuration). Les résultats ci-dessous viennent du **pipeline précédent** et
+ne sont plus représentatifs.
 
-#### Résultats obtenus sur le test complet (831 864 échantillons)
+#### Résultats provisoires (ancien pipeline, white box, StandardScaler, baseline v4)
 
-| Attaque | Accuracy | Precision macro | Recall macro | F1 macro | F1 weighted | Chute vs baseline |
-|---|---:|---:|---:|---:|---:|---:|
-| Baseline (clean) | 99.69% | 83.00% | 83.67% | 80.17% | 99.72% | — |
-| FGSM | 83.25% | 14.30% | 6.81% | 6.34% | 75.88% | -16.4 pts |
-| BIM | 72.10% | 5.47% | 5.79% | 5.61% | 69.86% | -27.6 pts |
-| PGD | 78.48% | 5.49% | 6.30% | 5.86% | 73.09% | -21.2 pts |
-| DeepFool | 16.71% | 4.64% | 8.29% | 2.86% | 25.14% | **-82.9 pts** |
-| JSMA | 83.45% | 27.32% | 25.44% | 17.96% | 81.91% | -16.2 pts |
-| CW | 67.15% | 5.35% | 5.39% | 5.37% | 66.93% | -32.5 pts |
+| Attaque | Accuracy | F1 macro | F1 weighted | Chute vs baseline |
+|---|---:|---:|---:|---:|
+| Baseline (clean) | 99.69% | 80.17% | 99.72% | — |
+| FGSM | 83.25% | 6.34% | 75.88% | -16.4 pts |
+| BIM | 72.10% | 5.61% | 69.86% | -27.6 pts |
+| PGD | 78.48% | 5.86% | 73.09% | -21.2 pts |
+| DeepFool | 16.71% | 2.86% | 25.14% | **-82.9 pts** |
+| JSMA | 83.45% | 17.96% | 81.91% | -16.2 pts |
+| C&W | 67.15% | 5.37% | 66.93% | -32.5 pts |
 
-**Observations clés** :
-- **DeepFool** est l'attaque la plus dévastatrice sur le test complet (accuracy chute à 16.71%)
-- **C&W** est la 2e plus efficace (67.15%), efficace sur toutes les classes non-BENIGN
-- **JSMA** touche moins les classes minoritaires que les attaques L∞ (F1 macro 18% vs ~6%)
-- Les attaques L∞ (FGSM, BIM, PGD) sont efficaces sur les classes minoritaires
-- Le F1 macro chute drastiquement (~6% vs 80%) : les classes minoritaires sont presque totalement échouées sous toutes les attaques
+Ces six mesures portent bien sur le test set complet (831 864 échantillons)
+pour les six attaques — vérifié dans `attacks_results_20260827_135218.pkl`.
+
+**Ce qui devrait changer après régénération** : en semi-white box, l'attaquant
+ne dispose plus des gradients du baseline mais de ceux d'un substitut. Les
+attaques devraient être moins destructrices et donc plus proches des chiffres
+du papier. La chute extrême de DeepFool (16.71 %) était très probablement un
+artefact du white box combiné à l'absence de bornes sur les attaques ART.
 
 #### Défis techniques rencontrés et résolus
 
 **1. Bug de compatibilité NumPy 2.x avec ART 1.18**
 
-`SaliencyMapMethod` (JSMA) utilise `np.product` qui a été supprimé dans NumPy 2.x. Correction appliquée via monkey-patch :
+`SaliencyMapMethod` (JSMA) utilise `np.product`, supprimé dans NumPy 2.x.
+Correction par monkey-patch, appliquée **avant** l'import d'ART :
 
 ```python
 if not hasattr(np, 'product'):
     np.product = np.prod
 ```
 
-Le patch doit être appliqué **avant** l'import d'ART.
-
 **2. Coût computationnel de JSMA**
 
-Une première tentative avec `theta=0.1, gamma=1.0` (paramètres par défaut ART) donnait 5.5 batches/heure sur H100, soit environ 12 jours pour le full test set.
-
-**Solution retenue** : ajustement des paramètres à `theta=0.3, gamma=0.15` (perturbation plus forte, jusqu'à 15% des features modifiées), permettant de traiter le test complet en ~15 minutes. Ces paramètres restent conformes à la littérature JSMA (Papernot 2015).
+Avec `theta=0.1, gamma=1.0` (Table 2 de l'article), le débit mesuré était de
+5.5 batches/heure sur H100, soit environ 12 jours pour le test set complet.
+Le détour historique par `theta=0.3, gamma=0.15` réglait le temps de calcul
+mais s'écartait de l'article. La configuration est revenue aux valeurs de la
+Table 2, et le périmètre d'évaluation est passé à un échantillon stratifié
+partagé par les six attaques. `08_generate_attacks.py` imprime une estimation
+de durée sur échantillon stratifié avant de lancer JSMA en grandeur réelle.
 
 **3. Mode targeted vs untargeted**
 
-Les implémentations ART de JSMA et C&W sont **targeted par défaut**. Passer les vrais labels comme cible rendait l'attaque triviale (le modèle prédit déjà correctement ces classes). Correction : passer `y=None` pour forcer le mode untargeted.
+Les implémentations ART de JSMA et C&W sont targeted par défaut. Passer les
+vrais labels comme cible rend l'attaque triviale — le modèle prédit déjà ces
+classes correctement. Correction : `y=None` pour forcer l'untargeted, ce qui
+correspond à l'hypothèse annoncée dans l'article.
 
-**4. Sauvegarde des exemples adversariaux**
+**4. Volume des exemples adversariaux**
 
-Chaque `X_adv_*.pkl` fait ~185 MB (831 864 × 58 features × float32). Total pour les 6 attaques : ~1.1 GB. Stockage dans `results/attacks/`, non versionné dans Git.
+Chaque `X_adv_*.pkl` fait ~185 MB sur le test complet (831 864 × 58 × float32),
+soit ~1.1 GB pour les six. Stockage dans `results/attacks/`, non versionné.
 
 ### Étape 7 — Test de vulnérabilité du baseline
 
-Intégrée à l'étape 6 : chaque attaque générée est immédiatement évaluée sur le baseline v4.
-
-**Interprétation** : le baseline v4 est **très vulnérable** aux attaques adversariales, particulièrement à DeepFool (accuracy 16.71%) et C&W (67.15%). Cette vulnérabilité motive l'implémentation des 4 mécanismes de défense de l'étape 8.
-
-**Paradoxe robustesse/précision (Tsipras et al. 2019)** : le baseline atteint 99.69% sur clean (vs 98.11% pour le papier), mais s'effondre à 16.71% sous DeepFool (vs 53.40% pour le papier). Un modèle très confiant est structurellement plus vulnérable aux attaques ciblées qui exploitent la netteté des frontières de décision.
+Intégrée à l'étape 6 : chaque attaque générée est immédiatement évaluée par
+transfert sur le baseline. Dépend de la régénération de l'étape 6.
 
 ### Étape 8 — Mécanismes de défense
 
-**Scripts prêts, jobs à soumettre.**
+**Scripts prêts, en attente de l'étape 6.**
 
-Quatre défenses implémentées, chacune évaluée sur données propres + 6 attaques adversariales :
-
-| Script | Défense | Approche | Hyperparamètres clés |
+| Script | Défense | Approche | Hyperparamètres |
 |---|---|---|---|
-| `11_defense_adversarial_training.py` | Adversarial Training (AT) | FGSM à la volée, mix 50/50 clean/adv | eps=0.05, ratio=0.5 |
-| `12_defense_label_smoothing.py` | Label Smoothing (LS) | Cross-entropy adoucie | alpha=0.1 |
-| `13_defense_gaussian_augmentation.py` | Gaussian Augmentation (GA) | Bruit gaussien sur inputs pendant training | sigma=0.1 |
-| `14_defense_denoising_autoencoder.py` | Denoising Autoencoder (DAE) | Autoencodeur 58→32→58 en amont du baseline | sigma=0.1, L1=1e-5 |
+| `11_defense_adversarial_training.py` | Adversarial Training | FGSM à la volée, mix 50/50 | eps=0.05, ratio=0.5 |
+| `12_defense_label_smoothing.py` | Label Smoothing | Cross-entropy adoucie | alpha=0.1 |
+| `13_defense_gaussian_augmentation.py` | Gaussian Augmentation | Bruit gaussien à l'entraînement | sigma=0.1 |
+| `14_defense_denoising_autoencoder.py` | Denoising Autoencoder | Autoencodeur 58→32→58 en amont | sigma=0.1, L1=1e-4 |
 
-**Choix méthodologiques communs à toutes les défenses** :
-- Même architecture que baseline v4 (BaselineDNN 512→256)
-- Mêmes hyperparamètres d'entraînement (lr=0.001, ReduceLROnPlateau, 50 epochs)
-- Évaluation intégrée : chaque script produit clean + 6 attaques dans un seul run
-- Sauvegarde des checkpoints séparés (`defense_at_best.pth`, `defense_ls_best.pth`, etc.)
+**Choix communs** : même architecture que le baseline (512→256), mêmes
+hyperparamètres d'entraînement, évaluation intégrée (clean + 6 attaques dans
+un seul run), checkpoints séparés.
 
 ### Étape 9 — Agrégation par ensemble
 
-**Script prêt.** Combine les 4 défenses via 3 méthodes d'agrégation :
+**Script prêt.** Combine les 4 défenses via 3 méthodes :
 
 | Méthode | Description |
 |---|---|
 | Majority Voting | Chaque défense vote, classe majoritaire retenue |
-| Weighted Average (égal) | Moyenne des probabilités softmax, poids 0.25 chacun |
-| Weighted Average (optimisé) | Poids optimisés par Nelder-Mead (scipy.optimize) pour maximiser accuracy sur attaques |
+| Weighted Average (égal) | Moyenne des softmax, poids 0.25 chacun |
+| Weighted Average (optimisé) | Poids optimisés par Nelder-Mead |
 
-**Différence méthodologique avec le papier** : le papier utilise scikit-optimize (Bayesian optimization). Nous utilisons **Nelder-Mead** de scipy.optimize pour :
-- Éviter une dépendance externe complexe à installer sur les clusters
-- Résultats équivalents pour un problème à 4 dimensions
-- Optimisation plus rapide (< 1 min)
-
-Cette différence est documentée dans le rapport final.
+**Déviation par rapport au papier** : il utilise scikit-optimize (optimisation
+bayésienne), nous utilisons Nelder-Mead de scipy — équivalent sur un problème
+à 4 dimensions, sans dépendance externe à installer sur les clusters.
 
 ---
 
 ## Correctifs méthodologiques du 3 septembre 2026
 
-Une relecture du pipeline a mis au jour plusieurs écarts avec le protocole
-de l'article, indépendants des choix méthodologiques déjà documentés
-(SMOTE custom, ordre split/normalisation/SMOTE). Ces écarts n'avaient pas
-été détectés parce que chaque script redéfinissait ses propres constantes
-au lieu de lire `configs/config.yaml` — deux sources de vérité qui ont
-divergé sans que ce soit visible.
+Une relecture du pipeline a mis au jour plusieurs écarts avec le protocole de
+l'article, indépendants des choix méthodologiques déjà documentés. Ces écarts
+n'avaient pas été détectés parce que chaque script redéfinissait ses propres
+constantes au lieu de lire `configs/config.yaml` — deux sources de vérité qui
+ont divergé sans que ce soit visible.
 
-1. **Absence de modèle substitut (l'écart le plus important).** Les six
-   attaques étaient générées directement sur le baseline
-   (`torchattacks.FGSM(model, ...)`, `PyTorchClassifier(model=model)`),
-   c'est-à-dire en white box complet : l'attaquant disposait des vrais
-   gradients du modèle qu'il attaque. L'article place l'attaquant en
-   semi-white box via un modèle substitut (58 → 100 → 100 → 15, entraîné
-   séparément). Un modèle substitut est maintenant implémenté
-   (`src/models/substitute.py`) et utilisé par
-   `scripts/08_generate_attacks.py` comme source des attaques ; le baseline
-   ne sert plus qu'à évaluer la transférabilité des exemples générés.
+**1. Absence de modèle substitut (l'écart le plus important).** Les six
+attaques étaient générées directement sur le baseline
+(`torchattacks.FGSM(model, ...)`, `PyTorchClassifier(model=model)`),
+c'est-à-dire en white box complet : l'attaquant disposait des vrais gradients
+du modèle qu'il attaque. L'article place l'attaquant en semi-white box via un
+substitut (58 → 100 → 100 → 15, entraîné séparément, 17 515 paramètres). Le
+substitut est implémenté dans `src/models/substitute.py` et sert désormais de
+source aux attaques ; le baseline ne fait plus qu'évaluer la transférabilité
+des exemples générés.
 
-2. **`clip_values` non défini sur le classifieur ART.** Trois attaques
-   (FGSM, BIM, PGD, via `torchattacks`) étaient bornées dans [0,1] par un
-   clamp interne à la bibliothèque ; les trois autres (DeepFool, JSMA, C&W,
-   via ART) ne l'étaient pas. `create_art_classifier` passe désormais
-   `clip_values=(0.0, 1.0)` (`configs/config.yaml` → `dataset.clip_values`).
+**2. `clip_values` non défini sur le classifieur ART.** FGSM, BIM et PGD (via
+`torchattacks`) étaient bornées dans [0,1] par un clamp interne à la
+bibliothèque ; DeepFool, JSMA et C&W (via ART) ne l'étaient pas.
+`create_art_classifier` passe maintenant `clip_values=(0.0, 1.0)`.
 
-3. **`StandardScaler` au lieu de `MinMaxScaler`.** Avec des features
-   centrées-réduites (donc en partie négatives), le clamp interne de
-   `torchattacks` (`torch.clamp(x, 0, 1)`) écrasait à zéro toutes les
-   valeurs négatives de l'échantillon lui-même, pas seulement de la
-   perturbation — pour FGSM, BIM et PGD uniquement, ce qui rendait leur
-   comportement incomparable à DeepFool/JSMA/C&W. L'article ramène les
-   features dans [0,1] ; `scripts/05_split_and_prepare.py` utilise
-   maintenant `MinMaxScaler`, cohérent avec `clip_values` ci-dessus.
+**3. `StandardScaler` au lieu de `MinMaxScaler`.** Avec des features
+centrées-réduites, donc en partie négatives, le clamp interne de
+`torchattacks` (`torch.clamp(x, 0, 1)`) écrasait à zéro toutes les valeurs
+négatives de l'échantillon lui-même, pas seulement de la perturbation — et
+seulement pour FGSM, BIM et PGD. C'est probablement ce qui expliquait
+l'écart de comportement entre les attaques L∞ et DeepFool. L'article ramène
+les features dans [0,1] ; `05_split_and_prepare.py` utilise maintenant
+`MinMaxScaler`, cohérent avec `clip_values`.
 
-4. **Sélection du meilleur epoch sur le test set.** `06_train_baseline.py`
-   choisissait le checkpoint et pilotait le scheduler sur l'accuracy du
-   test, qui servait donc à la fois à choisir le modèle et à l'évaluer —
-   biais à la hausse de l'accuracy rapportée. Un vrai split de validation
-   (`dataset.val_size` dans `configs/config.yaml`) existe maintenant ; le
-   test n'est plus touché qu'une fois, pour le rapport final.
+**4. Sélection du meilleur epoch sur le test set.** `06_train_baseline.py`
+choisissait le checkpoint et pilotait le scheduler sur l'accuracy du test, qui
+servait donc à la fois à choisir le modèle et à l'évaluer. Un vrai split de
+validation existe maintenant ; le test n'est touché qu'une fois, après
+l'entraînement, avec le modèle déjà figé. *Constat après régénération : le
+biais était négligeable — 99.69 % pour v4, 99.689 % pour le pipeline corrigé à
+nombre d'epochs égal. La correction reste nécessaire pour la validité du
+protocole.*
 
-5. **Paramètres d'attaque divergents de la Table 2 de l'article.** JSMA
-   utilisait `theta=0.3` (Table 2 : 0.1) et C&W `max_iter=10` (Table 2 : 9),
-   avec les autres hyperparamètres de C&W laissés aux défauts d'ART. Cause
-   racine : `configs/config.yaml` contenait déjà les bonnes valeurs mais
-   n'était lu par aucun script de calcul. `src/utils/config.py` centralise
-   maintenant le chargement (`load_config()`) et valide la cohérence de la
-   configuration avant tout calcul (scaler, clip_values, clés d'attaque
-   requises, dimensions du substitut).
+**5. Paramètres d'attaque divergents de la Table 2.** JSMA utilisait
+`theta=0.3` (Table 2 : 0.1) et C&W `max_iter=10` (Table 2 : 9), les autres
+hyperparamètres de C&W étant laissés aux défauts d'ART. Cause racine :
+`configs/config.yaml` contenait déjà les bonnes valeurs mais n'était lu par
+aucun script de calcul. `src/utils/config.py` centralise le chargement et
+valide la configuration avant tout calcul.
 
-6. **Périmètre d'évaluation hétérogène.** JSMA tournait sur un échantillon
-   stratifié de 30 000 (`09_generate_attacks_jsma_sample.py`) pendant que
-   les cinq autres attaques tournaient sur les 831 864 échantillons du
-   test set complet — mélange non signalé dans les résultats. Ce script
-   est désactivé (il refuse de s'exécuter) ; `08_generate_attacks.py`
-   couvre maintenant les six attaques avec un périmètre unique, piloté par
-   `evaluation.scope` dans la configuration.
+**6. Doublon entre les scripts 08 et 09.** `09_generate_attacks_jsma_sample.py`
+générait JSMA sur un échantillon de 30 000 et C&W sur le test complet, en
+white box et sans `clip_values`. Ses sorties (`*_sample30k.pkl`) n'étaient
+consommées par aucun autre script — vérifié : `10` et `11-14` ne chargent que
+les fichiers produits par `08`. Le script est désactivé (il refuse de
+s'exécuter) et `08` couvre les six attaques avec un périmètre unique, piloté
+par `evaluation.scope`.
 
-7. **`SMOTE_STRATEGY` en dur, et un bug de `k_neighbors`.** Les plafonds
-   par classe vivaient en dur dans `05_split_and_prepare.py` et pouvaient
-   changer sans que rien ne le signale ailleurs ; ils sont maintenant dans
-   `configs/config.yaml` → `dataset.smote_strategy`. Au passage, `k_neighbors`
-   se calculait sur la classe la plus petite de tout `y_train`, y compris
-   des classes non concernées par SMOTE — une classe ultra-rare hors
-   stratégie faisait chuter `k_neighbors` pour toutes les autres. Il se
-   calcule maintenant uniquement sur les classes réellement suréchantillonnées.
+> *Correction apportée à ce point le 5 septembre : une version antérieure de
+> ce README affirmait que le tableau de résultats mélangeait deux périmètres
+> d'évaluation. C'est faux. La relecture des logs
+> (`attacks_results_20260827_135218.pkl`) confirme que les six attaques
+> portaient bien sur les 831 864 échantillons du test complet. Le run sur
+> 30 000 existait mais ses chiffres n'ont jamais été présentés.*
 
-**Garde-fou ajouté en plus** : `src/utils/config.py` calcule une empreinte
-de configuration pour les données (`05`), le baseline (`06`) et le
-substitut/les attaques (`08`), et invalide un artefact mis en cache
-(checkpoint, `X_adv_*.pkl`) si la configuration a changé depuis sa
-génération — avec un message qui dit quelle clé a changé plutôt que deux
-hashes opaques. Ça évite de réutiliser silencieusement un vieux résultat
-après un changement de config, sans plus de cérémonie que ça.
+**7. `SMOTE_STRATEGY` en dur, et un bug de `k_neighbors`.** Les plafonds par
+classe vivaient en dur dans `05_split_and_prepare.py` et pouvaient changer
+sans qu'aucune empreinte ne bouge ; ils sont maintenant dans la configuration.
+Au passage, `k_neighbors` se calculait sur la classe la plus petite de tout
+`y_train`, y compris des classes non concernées par SMOTE — une classe
+ultra-rare hors stratégie faisait chuter `k_neighbors` pour toutes les autres.
+Il se calcule maintenant uniquement sur les classes réellement
+suréchantillonnées.
 
-**Risque opérationnel à surveiller** : revenir aux paramètres JSMA fidèles
-à l'article (`theta=0.1, gamma=1.0`) réintroduit potentiellement le
-problème de durée qui avait motivé le détour vers `theta=0.3, gamma=0.15`
-(~12 jours estimés sur le test set complet avec le baseline). Le substitut
-est plus petit, mais rien ne garantit que cela suffise.
-`08_generate_attacks.py` imprime maintenant une estimation de durée avant
-de lancer JSMA en grandeur réelle ; si elle est trop élevée, repasser
-`evaluation.scope` à `"sample"` dans `configs/config.yaml` plutôt que de
-laisser tourner le job à l'aveugle.
+### Garde-fou : empreintes de configuration
 
-**Conséquence** : les résultats de baseline (99.69%) et d'attaques
-documentés plus bas dans ce fichier viennent de l'ancien pipeline et ne
-sont plus représentatifs. Le pipeline doit être ré-exécuté dans l'ordre
-05 → 06 → 08 pour produire des chiffres comparables au protocole de
-l'article. Non vérifié dans cette passe (nécessite l'environnement
-cluster complet — `sklearn`, `imblearn`, `torchattacks`, `art` ne sont pas
-installés dans l'environnement de développement local) : le comportement
-réel de `MinMaxScaler` + SMOTE, l'entraînement du substitut de bout en
-bout, et les six attaques via ART/torchattacks. Vérifié localement :
-`src/utils/config.py` charge et valide `configs/config.yaml` sans erreur,
-et `src/models/substitute.py` instancie un modèle de 17 515 paramètres
-avec les bonnes formes d'entrée/sortie.
+`src/utils/config.py` calcule une empreinte pour les données (`05`), le
+baseline (`06`) et le substitut / les attaques (`08`). Chaque artefact mis en
+cache porte l'empreinte sous laquelle il a été produit, et est invalidé si la
+configuration a changé depuis — avec un message indiquant quelle clé diffère,
+plutôt que deux hashes opaques.
+
+L'empreinte des données est écrite dans `data/processed/data_fingerprint.json`
+à la fin de `05`, et revalidée en tête de `06` et `08`. Sans elle, modifier
+`val_size` sans relancer `05` produirait un checkpoint cohérent avec sa propre
+empreinte mais entraîné sur des données périmées — des chiffres faux sous une
+étiquette juste.
+
+Politique par artefact : le baseline lève une erreur bloquante (le réentraîner
+est le rôle de `06`), le substitut est réentraîné automatiquement (cache bon
+marché), les `X_adv_*.pkl` sont régénérés.
+
+Ce mécanisme remplace la numérotation manuelle des versions de checkpoints
+(`baseline_v1` à `v4`) : l'identité d'un modèle est désormais portée par
+l'empreinte de la configuration qui l'a produit, pas par un nom de fichier.
+
+---
 
 ## Structure du projet
 
 ```
 IDS-Adversarial-Defense/
 ├── src/                   Code source réutilisable
-│   ├── data/              Chargement et preprocessing des données
-│   ├── models/            Architectures DNN
-│   ├── attacks/           Implémentations des attaques adversariales
-│   ├── defenses/          Implémentations des mécanismes de défense
-│   └── utils/             Fonctions utilitaires
-├── notebooks/             Notebooks Jupyter pour l'exploration
+│   ├── data/              Chargement et preprocessing
+│   ├── models/            dnn.py (baseline), substitute.py
+│   ├── attacks/           Implémentations des attaques
+│   ├── defenses/          Implémentations des défenses
+│   └── utils/             config.py (chargement + empreintes)
+├── notebooks/             Exploration
 ├── scripts/               Scripts exécutables (numérotés par étape)
-├── configs/               Fichiers de configuration YAML
-├── data/                  Datasets (non versionnés)
-│   ├── raw/               Fichiers CSV originaux
-│   └── processed/         Données prétraitées (pickle)
-├── results/               Sorties (logs, checkpoints, figures)
+├── configs/               config.yaml — source unique de vérité
+├── data/                  Datasets (non versionnés, lien vers scratch)
+│   ├── raw/               CSV originaux
+│   └── processed/         Données prétraitées + data_fingerprint.json
+├── results/
 │   ├── logs/              Logs d'exécution
-│   ├── checkpoints/       Modèles entraînés
-│   ├── attacks/           Exemples adversariaux générés
-│   └── figures/           Graphiques pour le rapport
+│   ├── checkpoints/       Modèles entraînés (v1-v4 archivés, baseline_best courant)
+│   ├── attacks/           Exemples adversariaux
+│   └── figures/           Graphiques
 └── tests/                 Tests unitaires
 ```
 
@@ -536,7 +674,7 @@ kaggle datasets download \
 
 ## Utilisation
 
-Les scripts sont numérotés dans l'ordre d'exécution du pipeline.
+Les scripts sont numérotés dans l'ordre d'exécution.
 
 ```bash
 python scripts/00_test_environment.py
@@ -546,11 +684,10 @@ python scripts/03_preprocess_dataset.py
 sbatch scripts/04_feature_selection.sh
 sbatch scripts/05_split_and_prepare.sh
 sbatch scripts/06_train_baseline.sh
-python scripts/07_plot_results.py
+sbatch scripts/07_plot_results.sh
 
 sbatch scripts/08_generate_attacks.sh
-# 09_generate_attacks_jsma_sample.sh est desactive (voir Correctifs du 3
-# septembre 2026) : ne pas le soumettre, 08 couvre desormais JSMA et C&W.
+# 09_generate_attacks_jsma_sample.sh est desactive : ne pas le soumettre.
 sbatch scripts/10_evaluate_and_plot_attacks.sh
 
 sbatch scripts/11_defense_adversarial_training.sh
@@ -561,20 +698,40 @@ sbatch scripts/14_defense_denoising_autoencoder.sh
 sbatch scripts/16_ensemble_aggregation.sh
 ```
 
+Les étapes 05, 06 et 08 se chaînent avec `--dependency=afterok` pour ne pas
+lancer une étape si la précédente a échoué :
+
+```bash
+J05=$(sbatch --parsable scripts/05_split_and_prepare.sh)
+J06=$(sbatch --parsable --dependency=afterok:$J05 scripts/06_train_baseline.sh)
+J08=$(sbatch --parsable --dependency=afterok:$J06 scripts/08_generate_attacks.sh)
+```
+
+Les scripts `.sh` contiennent des directives `--account` et `--gres`
+spécifiques au cluster. Sur narval, les comptes sont `def-smoolak_cpu` et
+`def-smoolak_gpu` (le compte sans suffixe n'existe pas) et les GPU sont des
+A100 ; sur nibi, l'alias sans suffixe est résolu automatiquement et les GPU
+sont des H100. Ces différences ne sont pas versionnées.
+
 ---
 
 ## Attaques adversariales implémentées
 
-Six attaques standards de la littérature :
+Paramètres alignés sur la Table 2 de l'article.
 
 | Attaque | Référence | Type | Norme | Hyperparamètres |
 |---|---|---|---|---|
 | FGSM | Goodfellow et al., 2014 | Single-step | L∞ | eps=0.2 |
 | BIM | Kurakin et al., 2016 | Iterative | L∞ | eps=0.3, alpha=0.01, 100 iter |
 | PGD | Madry et al., 2017 | Iterative | L∞ | eps=0.3, alpha=0.01, 100 iter |
-| DeepFool | Moosavi-Dezfooli et al., 2015 | Iterative | L2 | max_iter=100 |
-| JSMA | Papernot et al., 2015 | Feature-based | L0 | theta=0.3, gamma=0.15, untargeted |
-| C&W | Carlini & Wagner, 2016 | Optimization | L2 | max_iter=10, confidence=0.0, untargeted |
+| DeepFool | Moosavi-Dezfooli et al., 2015 | Iterative | L2 | epsilon=1e-6 (overshoot), max_iter=100 |
+| JSMA | Papernot et al., 2015 | Feature-based | L0 | theta=0.1, gamma=1.0, untargeted |
+| C&W | Carlini & Wagner, 2016 | Optimization | L2 | max_iter=9, confidence=0.0, untargeted |
+
+Pour C&W, les paramètres laissés implicites par l'article sont maintenant
+explicites dans la configuration (`binary_search_steps=10`,
+`initial_const=0.01`, `learning_rate=0.01`) plutôt que subis comme défauts
+de bibliothèque.
 
 ## Mécanismes de défense
 
@@ -602,39 +759,34 @@ Quatre défenses combinées dans un ensemble :
 
 ## Nos résultats
 
-### Baseline v4 (CIC-IDS 2017)
+### Baseline v5 (CIC-IDS 2017) — à jour
 
 | Métrique | Notre baseline | Papier | Écart |
 |---|---:|---:|---:|
-| **Accuracy** | **99.69%** | 98.11% | +1.58 |
-| F1 weighted | 99.72% | Non détaillé | — |
-| F1 macro | 80.17% | Non détaillé | — |
+| **Accuracy** | **99.79%** | 98.11% | +1.68 |
+| F1 weighted | 99.79% | Non détaillé | — |
+| F1 macro | 84.11% | Non détaillé | — |
 
-### Vulnérabilité du baseline sous attaques (test complet 831k)
+### Vulnérabilité sous attaques — provisoire
 
-| Attaque | Accuracy | F1 macro | F1 weighted | Chute vs baseline |
-|---|---:|---:|---:|---:|
-| Baseline (clean) | 99.69% | 80.17% | 99.72% | — |
-| FGSM | 83.25% | 6.34% | 75.88% | -16.4 pts |
-| BIM | 72.10% | 5.61% | 69.86% | -27.6 pts |
-| PGD | 78.48% | 5.86% | 73.09% | -21.2 pts |
-| DeepFool | 16.71% | 2.86% | 25.14% | -82.9 pts |
-| JSMA | 83.45% | 17.96% | 81.91% | -16.2 pts |
-| CW | 67.15% | 5.37% | 66.93% | -32.5 pts |
+Chiffres de l'ancien pipeline (white box, `StandardScaler`, sans
+`clip_values`, baseline v4). Voir le tableau de l'étape 6. À remplacer dès que
+`08_generate_attacks.py` aura tourné sur le pipeline corrigé.
 
 ### Résultats des défenses
 
-**En attente.** Les scripts des 4 défenses individuelles et de l'ensemble sont prêts. Les jobs seront soumis dès que la maintenance des clusters se termine.
+**En attente** de la régénération de l'étape 6.
 
 ---
 
 ## Environnement de développement
 
-Le projet utilise une architecture hybride :
+- **Développement local** : Arch Linux (Python 3.12) + Windows PowerShell
+- **Exécution intensive** : Alliance Canada (nibi et narval), Python 3.11,
+  jobs SLURM avec GPU H100 / A100
+- **Synchronisation** : Git + GitHub
 
-- **Développement local** : Arch Linux (Python 3.12) + Windows PowerShell (édition secondaire)
-- **Exécution intensive** : Alliance Canada (serveurs nibi et narval), Python 3.11, jobs SLURM avec GPU H100/A100
-- **Synchronisation** : Git + GitHub (dépôt privé)
+---
 
 ## Références principales
 
