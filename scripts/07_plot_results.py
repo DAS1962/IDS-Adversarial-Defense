@@ -34,7 +34,7 @@ def load_latest_results():
     latest = files[-1]
     print(f"Chargement de : {latest.name}")
     data = joblib.load(latest)
-    return data["history"], data["results"], latest.stem
+    return data["history"], data["results"], "final_" + latest.stem
 
 
 def plot_learning_curves(history, output_path):
@@ -45,7 +45,7 @@ def plot_learning_curves(history, output_path):
 
     # Loss
     ax1.plot(epochs, history["train_loss"], label="Train Loss", marker='o', markersize=4)
-    ax1.plot(epochs, history["test_loss"], label="Test Loss", marker='s', markersize=4)
+    ax1.plot(epochs, history["val_loss"], label="Validation Loss", marker='s', markersize=4)
     ax1.set_xlabel("Epoch")
     ax1.set_ylabel("Loss")
     ax1.set_title("Loss evolution")
@@ -54,7 +54,7 @@ def plot_learning_curves(history, output_path):
 
     # Accuracy
     ax2.plot(epochs, history["train_acc"], label="Train Accuracy", marker='o', markersize=4)
-    ax2.plot(epochs, history["test_acc"], label="Test Accuracy", marker='s', markersize=4)
+    ax2.plot(epochs, history["val_acc"], label="Validation Accuracy", marker='s', markersize=4)
     ax2.set_xlabel("Epoch")
     ax2.set_ylabel("Accuracy")
     ax2.set_title("Accuracy evolution")
@@ -157,6 +157,9 @@ def plot_confusion_matrix(results, output_path):
     # Normaliser par ligne pour lisibilite (proportion des predictions par vraie classe)
     cm_normalized = cm.astype('float') / cm.sum(axis=1, keepdims=True)
 
+    supports = cm.sum(axis=1)
+    row_labels = [f"{n} (n={s:,})" for n, s in zip(class_names, supports)]
+
     fig, ax = plt.subplots(figsize=(14, 12))
     sns.heatmap(
         cm_normalized,
@@ -164,7 +167,7 @@ def plot_confusion_matrix(results, output_path):
         fmt='.2f',
         cmap='Blues',
         xticklabels=class_names,
-        yticklabels=class_names,
+        yticklabels=row_labels,
         cbar_kws={'label': 'Proportion'},
         ax=ax,
     )

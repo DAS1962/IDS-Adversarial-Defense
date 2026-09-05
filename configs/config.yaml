@@ -196,8 +196,8 @@ evaluation:
   # de resultats melange des tailles d'echantillon incomparables.
   # JSMA tournait sur 30 000 alors que les cinq autres tournaient sur
   # 831 864, ce qui n'etait signale nulle part.
-  scope: "full"
-  sample_size: 30000
+  scope: "sample"
+  sample_size: 50000
   batch_size: 512
 
 # ---------- Defenses ----------
