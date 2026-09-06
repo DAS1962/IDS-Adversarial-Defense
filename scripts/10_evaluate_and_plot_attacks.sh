@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=eval_plot_attacks
-#SBATCH --account=def-smoolak
+#SBATCH --account=def-smoolak_cpu
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=01:00:00
