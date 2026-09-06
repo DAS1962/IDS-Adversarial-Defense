@@ -1,4 +1,3 @@
-
 # Framework de défense adversariale pour IDS
 
 Reproduction et extension de l'article :
@@ -38,18 +37,17 @@ Le projet suit les 9 étapes du framework proposé par Awad et al. (2025) :
 | 1 | Collection des données | Terminée |
 | 2 | Preprocessing | Terminée |
 | 3 | Feature selection | Terminée |
-| 4 | Split train/val/test + Normalisation + SMOTE | **Régénérée le 5 sept. 2026** (MinMaxScaler, vrai split validation) |
-| 5 | Baseline DNN | **Réentraînée le 5 sept. 2026** (v5, 100 epochs, sélection sur validation) |
-| 6 | Attaques adversariales | Réécrite (substitut, clip_values) — **régénération en cours** |
-| 7 | Test de vulnérabilité | Intégrée à l'étape 6, dépend de sa régénération |
-| 8 | Mécanismes de défense | Scripts prêts, dépendent de l'étape 6 |
+| 4 | Split train/val/test + Normalisation + SMOTE | **Terminée** — régénérée le 5 sept. 2026 (MinMaxScaler, vrai split validation) |
+| 5 | Baseline DNN | **Terminée** — v5 réentraînée le 5 sept. 2026 (100 epochs, sélection sur validation) |
+| 6 | Attaques adversariales | **Terminée** — régénérées le 6 sept. 2026 (semi-white box via substitut, `clip_values`) |
+| 7 | Test de vulnérabilité | **Terminée** — intégrée à l'étape 6, plus analyse sur test rééquilibré |
+| 8 | Mécanismes de défense | Scripts prêts, jobs à soumettre |
 | 9 | Agrégation par ensemble | Script prêt, dépend de l'étape 8 |
 
-> **Les résultats d'attaques (étapes 6-7) documentés dans ce fichier viennent
-> encore du pipeline précédent** (white box sans substitut, sans `clip_values`).
-> Ils sont marqués comme provisoires et seront remplacés dès que
-> `08_generate_attacks.py` aura tourné sur le pipeline corrigé. Les résultats
-> de baseline (étapes 4-5), eux, sont à jour.
+Le pipeline complet a été ré-exécuté de bout en bout après les correctifs
+méthodologiques du 3 septembre. **Tous les chiffres de ce document sont à
+jour**, à l'exception du tableau explicitement marqué « ancien pipeline »
+dans l'étape 6, conservé à titre de comparaison.
 
 ---
 
@@ -145,6 +143,14 @@ méthodologiques » pour le raisonnement.
 `val_size` est fixé à 0.05 et non 0.15 : une sélection d'epoch n'a pas besoin de
 378 000 exemples de validation, et chaque point retiré au train pèse sur des
 classes déjà ultra-rares (Heartbleed n'a que 6 exemples dans le train).
+
+**Composition du test set** — chiffre déterminant pour l'interprétation des
+résultats d'attaques (voir étape 7) :
+
+| | Lignes | Proportion |
+|---|---:|---:|
+| BENIGN | 691 369 | **83.1%** |
+| Attaques (14 classes) | 140 495 | 16.9% |
 
 **Débordement du domaine après normalisation** :
 
@@ -244,7 +250,7 @@ explicite), mais la marge est d'un seul échantillon.
    le problème des classes ultra-rares. Le cap par classe est une déviation
    assumée, justifiée par la littérature qui recommande au minimum 100
    exemples réels par classe pour SMOTE. C'est probablement la principale
-   cause de l'écart d'accuracy avec le papier.
+   cause de l'écart d'accuracy avec le papier sur données propres.
 
 4. **Reproductibilité inter-cluster** : le script a été exécuté sur nibi et
    narval à partir du même `cicids2017_selected.pkl`, et produit exactement
@@ -424,31 +430,85 @@ F1 par classe avec support, matrice de confusion normalisée avec support.
 
 ### Étape 6 — Génération des attaques adversariales
 
-**Régénération en cours.** Le script `08_generate_attacks.py` a été réécrit
-(modèle substitut, `clip_values`, périmètre unifié, paramètres lus depuis la
-configuration). Les résultats ci-dessous viennent du **pipeline précédent** et
-ne sont plus représentatifs.
+**Protocole semi-white box.** Les six attaques sont générées sur un **modèle
+substitut** (58 → 100 → 100 → 15, 17 515 paramètres), pas sur le baseline.
+L'attaquant connaît l'architecture générale mais pas les poids du modèle
+qu'il vise. Les exemples produits sont ensuite évalués par **transfert** sur
+le baseline : c'est cette évaluation qui mesure la vulnérabilité réelle.
 
-#### Résultats provisoires (ancien pipeline, white box, StandardScaler, baseline v4)
+**Validation du substitut** : F1 pondéré de **0.9826** sur le set de
+validation, contre 0.98 annoncé par l'article (« We obtain the same detection
+ability as the IDS baseline classifier on the clean data samples, with an
+average F1 score of 0.98 »). Le critère est atteint. Le substitut plafonne à
+97.91 % d'accuracy à l'entraînement, nettement sous le baseline — c'est voulu,
+un attaquant réaliste n'a pas un modèle parfait.
 
-| Attaque | Accuracy | F1 macro | F1 weighted | Chute vs baseline |
-|---|---:|---:|---:|---:|
-| Baseline (clean) | 99.69% | 80.17% | 99.72% | — |
-| FGSM | 83.25% | 6.34% | 75.88% | -16.4 pts |
-| BIM | 72.10% | 5.61% | 69.86% | -27.6 pts |
-| PGD | 78.48% | 5.86% | 73.09% | -21.2 pts |
-| DeepFool | 16.71% | 2.86% | 25.14% | **-82.9 pts** |
-| JSMA | 83.45% | 17.96% | 81.91% | -16.2 pts |
-| C&W | 67.15% | 5.37% | 66.93% | -32.5 pts |
+Le gate F1 du substitut est évalué sur le **set de validation**, jamais sur le
+test : décider de lancer ou non les attaques en regardant le test
+reproduirait le biais retiré de l'étape 5.
 
-Ces six mesures portent bien sur le test set complet (831 864 échantillons)
-pour les six attaques — vérifié dans `attacks_results_20260827_135218.pkl`.
+**Exécution** : test set complet (831 864 échantillons), narval, A100,
+**2 h 53**. Le substitut est mis en cache et rechargé entre les runs tant que
+sa configuration ne change pas.
 
-**Ce qui devrait changer après régénération** : en semi-white box, l'attaquant
-ne dispose plus des gradients du baseline mais de ceux d'un substitut. Les
-attaques devraient être moins destructrices et donc plus proches des chiffres
-du papier. La chute extrême de DeepFool (16.71 %) était très probablement un
-artefact du white box combiné à l'absence de bornes sur les attaques ART.
+#### Résultats — pipeline corrigé (6 septembre 2026)
+
+| Attaque | Accuracy | F1 macro | F1 pondéré | Recall BENIGN | Durée |
+|---|---:|---:|---:|---:|---:|
+| **Clean** | **99.79%** | **0.8411** | 0.9979 | 0.9984 | — |
+| FGSM | 86.75% | 0.1502 | 0.8251 | 0.9889 | 1.3 s |
+| BIM | 87.42% | 0.1621 | 0.8293 | 0.9952 | 1.6 min |
+| PGD | 82.10% | 0.0605 | 0.7498 | 0.9876 | 1.2 min |
+| DeepFool | 86.92% | 0.3291 | 0.8512 | 0.9719 | 44.8 min |
+| JSMA | 83.05% | 0.0605 | 0.7544 | 0.9993 | 52.2 min |
+| C&W | 84.14% | 0.3004 | 0.8652 | 0.8810 | 72.0 min |
+
+**Lecture obligatoire de ce tableau** : les six accuracies se situent entre 82
+et 88 %, soit très exactement la zone du **plancher fixé par la proportion de
+BENIGN dans le test (83.1 %)**. Ce n'est pas de la robustesse. Voir l'étape 7.
+
+**Classement réel des attaques, par F1 macro** :
+
+| Rang | Attaque | F1 macro | Interprétation |
+|---:|---|---:|---|
+| 1 | PGD | 0.0605 | Détection quasi nulle |
+| 1 | JSMA | 0.0605 | Évasion totale (recall 0.0000 sur les 14 classes d'attaque) |
+| 3 | FGSM | 0.1502 | Détection quasi nulle |
+| 4 | BIM | 0.1621 | Détection quasi nulle |
+| 5 | C&W | 0.3004 | Seule attaque qui dégrade aussi BENIGN |
+| 6 | DeepFool | 0.3291 | La moins destructrice |
+
+JSMA est le cas d'école : recall de 0.9993 sur BENIGN et **0.0000 sur les
+quatorze autres classes**. L'accuracy de 83.05 % correspond exactement à
+691 369 × 0.9993 / 831 864. Une évasion parfaite produit donc un chiffre
+d'apparence banale.
+
+C&W est le seul dont le recall BENIGN chute (0.8810) : il ne se contente pas
+de masquer les intrusions, il génère aussi des faux positifs sur le trafic
+légitime. C'est pourquoi son accuracy descend alors que son F1 macro reste
+au-dessus de PGD et JSMA.
+
+#### Comparaison avec l'ancien pipeline (white box, StandardScaler)
+
+| Attaque | Ancien (white box) | Nouveau (semi-white box) | Écart |
+|---|---:|---:|---:|
+| DeepFool | 16.71% | 86.92% | **+70.2** |
+| C&W | 67.15% | 84.14% | +17.0 |
+| BIM | 72.10% | 87.42% | +15.3 |
+| PGD | 78.48% | 82.10% | +3.6 |
+| FGSM | 83.25% | 86.75% | +3.5 |
+| JSMA | 83.45% | 83.05% | −0.4 |
+
+Les attaques ART (DeepFool, C&W) bougent beaucoup, les attaques torchattacks
+presque pas — cohérent avec le fait que les premières tournaient sans
+`clip_values`, donc sans bornes, ce qui les rendait artificiellement
+destructrices.
+
+**Le chiffre de 16.71 % pour DeepFool était un artefact**, pas un résultat.
+L'explication avancée à l'époque (paradoxe robustesse/précision de Tsipras et
+al., selon lequel un modèle très confiant serait plus vulnérable aux
+perturbations minimales) n'a plus lieu d'être : le phénomène disparaît dès
+que le protocole est corrigé.
 
 #### Défis techniques rencontrés et résolus
 
@@ -462,15 +522,21 @@ if not hasattr(np, 'product'):
     np.product = np.prod
 ```
 
-**2. Coût computationnel de JSMA**
+**2. Coût computationnel de JSMA — problème résolu par le substitut**
 
-Avec `theta=0.1, gamma=1.0` (Table 2 de l'article), le débit mesuré était de
-5.5 batches/heure sur H100, soit environ 12 jours pour le test set complet.
-Le détour historique par `theta=0.3, gamma=0.15` réglait le temps de calcul
-mais s'écartait de l'article. La configuration est revenue aux valeurs de la
-Table 2, et le périmètre d'évaluation est passé à un échantillon stratifié
-partagé par les six attaques. `08_generate_attacks.py` imprime une estimation
-de durée sur échantillon stratifié avant de lancer JSMA en grandeur réelle.
+Avec `theta=0.1, gamma=1.0` (Table 2), le débit mesuré sur le **baseline** en
+white box était de 5.5 batches/heure sur H100, soit environ 12 jours pour le
+test complet. C'est ce qui avait motivé le détour par `theta=0.3, gamma=0.15`.
+
+Sur le **substitut** (17 515 paramètres contre 165 391), JSMA prend
+**52 minutes** sur le test complet avec les paramètres fidèles à la Table 2.
+Le problème venait donc de la taille du modèle attaqué, pas de JSMA. Un run
+exploratoire sur 50 000 échantillons stratifiés (183 s) avait permis
+d'extrapoler correctement avant d'engager le job complet.
+
+`08_generate_attacks.py` conserve une estimation de durée sur échantillon
+stratifié avant de lancer JSMA en grandeur réelle, avec repli sur un tirage
+aléatoire si la stratification échoue.
 
 **3. Mode targeted vs untargeted**
 
@@ -481,17 +547,93 @@ correspond à l'hypothèse annoncée dans l'article.
 
 **4. Volume des exemples adversariaux**
 
-Chaque `X_adv_*.pkl` fait ~185 MB sur le test complet (831 864 × 58 × float32),
+Chaque `X_adv_*.pkl` fait 184 MB sur le test complet (831 864 × 58 × float32),
 soit ~1.1 GB pour les six. Stockage dans `results/attacks/`, non versionné.
+
+**5. Périmètre exploratoire vs définitif**
+
+Un run intermédiaire sur 50 000 échantillons stratifiés a servi à mesurer la
+vitesse de JSMA. Ses chiffres coïncident à moins d'un point près avec ceux du
+test complet, ce qui valide la représentativité de l'échantillon. Il a
+toutefois révélé une limite : à 50 000, l'échantillon ne contient **aucun**
+Heartbleed ni SQL Injection (4 et 7 exemples sur 831 864). Les résultats
+définitifs utilisent donc le test complet.
 
 ### Étape 7 — Test de vulnérabilité du baseline
 
-Intégrée à l'étape 6 : chaque attaque générée est immédiatement évaluée par
-transfert sur le baseline. Dépend de la régénération de l'étape 6.
+#### Le plancher d'accuracy
+
+Le test set contient 83.1 % de trafic BENIGN. Une attaque adversariale masque
+les intrusions en les faisant passer pour bénignes, mais ne touche pas au
+trafic légitime, qui reste correctement classé. **L'accuracy ne peut donc pas
+descendre sous 83.1 % tant que BENIGN tient.** C'est un plancher arithmétique,
+pas une propriété du modèle.
+
+Conséquence directe : un classifieur qui prédirait « BENIGN » pour tout, sans
+rien apprendre, obtiendrait exactement le même 83.1 %. Les six accuracies
+mesurées entre 82 et 88 % ne signifient donc pas que le baseline résiste —
+elles signifient que les intrusions sont devenues invisibles.
+
+**Le F1 macro est la métrique à lire** : de 0.8411 en clean à 0.0605 sous PGD
+et JSMA, soit une chute de 93 %. Le modèle ne détecte plus rien.
+
+#### Vérification : évaluation sur test rééquilibré 50/50
+
+Pour tester l'hypothèse du plancher, les six jeux d'exemples adversariaux
+déjà générés ont été réévalués sur un sous-ensemble à parts égales : toutes
+les lignes d'attaque conservées (140 495) et autant de BENIGN tirés au hasard,
+soit **280 990 lignes à exactement 50 % BENIGN**. Aucune classe d'attaque
+n'est perdue — Heartbleed garde ses 4 exemples, SQL Injection ses 7. Le même
+modèle, les mêmes exemples adversariaux : seul le sous-ensemble évalué change.
+
+Script : `scripts/15_balanced_evaluation.py`.
+
+| Attaque | Test complet (83.1% BENIGN) | Test équilibré (50% BENIGN) | Papier (Table 5) | Écart final |
+|---|---:|---:|---:|---:|
+| Clean | 99.79% | 99.68% | 98.11% | +1.6 |
+| PGD | 82.10% | **49.43%** | 46.00% | **+3.4** |
+| FGSM | 86.75% | **62.96%** | 54.50% | +8.5 |
+| DeepFool | 86.92% | **66.77%** | 53.00% | +13.8 |
+| BIM | 87.42% | **63.67%** | 45.00% | +18.7 |
+| JSMA | 83.05% | **49.97%** | 81.00% | −31.0 |
+| C&W | 84.14% | 76.37% | 36.00% | +40.4 |
+
+**Écart absolu moyen avec le papier** : 32.5 points sur le test complet,
+**19.3 points** sur le test équilibré. Rapprochement de 13.2 points.
+
+**Conclusions** :
+
+1. **La composition du test explique la majeure partie de l'écart** pour PGD,
+   FGSM et DeepFool. PGD tombe à 3.4 points du chiffre du papier. L'article
+   mentionne dans sa section « Adversarial examples generation » un test de
+   20 000 échantillons dont la moitié de trafic régulier — une composition
+   proche de 50/50, donc un plancher à ~50 % au lieu de 83.1 %.
+
+2. **L'accuracy est une métrique trompeuse ici, et c'est démontrable** : les
+   mêmes exemples adversariaux évalués par le même modèle donnent 83.05 % ou
+   49.97 % selon le sous-ensemble. Seul le F1 macro reste stable dans son
+   verdict.
+
+3. **JSMA bascule de l'autre côté.** Il coïncidait avec le papier sur le test
+   complet (83.05 % contre 81 %) et s'en éloigne de 31 points une fois
+   rééquilibré. Son recall BENIGN de 0.9993 et son F1 macro de 0.0445 montrent
+   une évasion totale : il atterrit mécaniquement sur le plancher, quel qu'il
+   soit. **La coïncidence sur le test complet était fortuite.**
+
+4. **C&W résiste au rééquilibrage** (76.37 %, à 40 points du papier). Son F1
+   macro remonte à 0.3787, le meilleur des six : il conserve de vraies
+   performances sur DDoS, DoS Hulk et PortScan, qui pèsent lourd dans le
+   sous-ensemble équilibré. L'attaque est **sous-itérée** — `max_iter=9` de la
+   Table 2, plus les valeurs par défaut d'ART pour la recherche binaire.
+   Piste concrète pour la suite : augmenter le budget d'optimisation et
+   mesurer l'effet.
+
+**Figure** : `results/figures/attacks_balanced_comparison.png` — trois séries
+(test complet, test équilibré, papier) avec les deux planchers tracés.
 
 ### Étape 8 — Mécanismes de défense
 
-**Scripts prêts, en attente de l'étape 6.**
+**Scripts prêts, jobs à soumettre.**
 
 | Script | Défense | Approche | Hyperparamètres |
 |---|---|---|---|
@@ -503,6 +645,10 @@ transfert sur le baseline. Dépend de la régénération de l'étape 6.
 **Choix communs** : même architecture que le baseline (512→256), mêmes
 hyperparamètres d'entraînement, évaluation intégrée (clean + 6 attaques dans
 un seul run), checkpoints séparés.
+
+**Métrique de suivi** : le F1 macro, pas l'accuracy. Une défense qui ferait
+remonter l'accuracy de 83 % à 90 % sans améliorer le F1 macro n'aurait rien
+défendu du tout.
 
 ### Étape 9 — Agrégation par ensemble
 
@@ -537,6 +683,7 @@ substitut (58 → 100 → 100 → 15, entraîné séparément, 17 515 paramètre
 substitut est implémenté dans `src/models/substitute.py` et sert désormais de
 source aux attaques ; le baseline ne fait plus qu'évaluer la transférabilité
 des exemples générés.
+*Effet mesuré* : DeepFool passe de 16.71 % à 86.92 %.
 
 **2. `clip_values` non défini sur le classifieur ART.** FGSM, BIM et PGD (via
 `torchattacks`) étaient bornées dans [0,1] par un clamp interne à la
@@ -547,10 +694,9 @@ bibliothèque ; DeepFool, JSMA et C&W (via ART) ne l'étaient pas.
 centrées-réduites, donc en partie négatives, le clamp interne de
 `torchattacks` (`torch.clamp(x, 0, 1)`) écrasait à zéro toutes les valeurs
 négatives de l'échantillon lui-même, pas seulement de la perturbation — et
-seulement pour FGSM, BIM et PGD. C'est probablement ce qui expliquait
-l'écart de comportement entre les attaques L∞ et DeepFool. L'article ramène
-les features dans [0,1] ; `05_split_and_prepare.py` utilise maintenant
-`MinMaxScaler`, cohérent avec `clip_values`.
+seulement pour FGSM, BIM et PGD. L'article ramène les features dans [0,1] ;
+`05_split_and_prepare.py` utilise maintenant `MinMaxScaler`, cohérent avec
+`clip_values`.
 
 **4. Sélection du meilleur epoch sur le test set.** `06_train_baseline.py`
 choisissait le checkpoint et pilotait le scheduler sur l'accuracy du test, qui
@@ -592,6 +738,19 @@ ultra-rare hors stratégie faisait chuter `k_neighbors` pour toutes les autres.
 Il se calcule maintenant uniquement sur les classes réellement
 suréchantillonnées.
 
+**8. Chiffres de référence du papier erronés dans `10_evaluate_and_plot_attacks.py`.**
+Le dictionnaire `PAPER_RESULTS` contenait FGSM 0.859, BIM 0.810, PGD 0.8025 et
+JSMA 0.482 — des valeurs issues d'un **mélange entre la Table 5** (accuracy du
+détecteur sous attaque) **et la Table 7** (performance des défenses
+individuelles : Label Smoothing 85.9, Adversarial Training 80.25, Gaussian
+Augmentation 79.8, DAE 84.8). Les vraies références de la Table 5 sont
+FGSM 54.5, BIM 45, PGD 46, DeepFool 53, JSMA 81, C&W 36.
+
+L'erreur inversait notamment la lecture de JSMA : comparé à 48.2 %, notre
+83.05 % semblait très éloigné ; comparé au vrai 81 %, il coïncidait. Cette
+confusion figurait aussi dans les échanges antérieurs sur l'avancement du
+projet et doit être signalée.
+
 ### Garde-fou : empreintes de configuration
 
 `src/utils/config.py` calcule une empreinte pour les données (`05`), le
@@ -601,18 +760,27 @@ configuration a changé depuis — avec un message indiquant quelle clé diffèr
 plutôt que deux hashes opaques.
 
 L'empreinte des données est écrite dans `data/processed/data_fingerprint.json`
-à la fin de `05`, et revalidée en tête de `06` et `08`. Sans elle, modifier
-`val_size` sans relancer `05` produirait un checkpoint cohérent avec sa propre
-empreinte mais entraîné sur des données périmées — des chiffres faux sous une
-étiquette juste.
+à la fin de `05`, et revalidée en tête de `06`, `08`, `10` et `15`. Sans elle,
+modifier `val_size` sans relancer `05` produirait un checkpoint cohérent avec
+sa propre empreinte mais entraîné sur des données périmées — des chiffres faux
+sous une étiquette juste.
 
 Politique par artefact : le baseline lève une erreur bloquante (le réentraîner
 est le rôle de `06`), le substitut est réentraîné automatiquement (cache bon
 marché), les `X_adv_*.pkl` sont régénérés.
 
+Le mécanisme a fait son travail lors du passage de `scope: "sample"` à
+`scope: "full"` : les six fichiers `X_adv` ont été détectés périmés et
+régénérés, avec le message `evaluation_scope.scope : 'sample' -> 'full'`.
+
 Ce mécanisme remplace la numérotation manuelle des versions de checkpoints
 (`baseline_v1` à `v4`) : l'identité d'un modèle est désormais portée par
 l'empreinte de la configuration qui l'a produit, pas par un nom de fichier.
+
+**Limite connue** : les scripts `.sh` n'ont pas de `set -e`, donc Slurm
+rapporte `COMPLETED` avec un code 0 même quand le script Python plante.
+Vérifier les fichiers produits, pas le statut Slurm. `15_balanced_evaluation.sh`
+propage correctement le code de sortie ; les autres restent à corriger.
 
 ---
 
@@ -634,8 +802,9 @@ IDS-Adversarial-Defense/
 │   └── processed/         Données prétraitées + data_fingerprint.json
 ├── results/
 │   ├── logs/              Logs d'exécution
-│   ├── checkpoints/       Modèles entraînés (v1-v4 archivés, baseline_best courant)
-│   ├── attacks/           Exemples adversariaux
+│   ├── checkpoints/       Modèles entraînés (v1-v4 archivés, baseline_best
+│   │                      et substitute_best courants)
+│   ├── attacks/           Exemples adversariaux + sidecars d'empreinte
 │   └── figures/           Graphiques
 └── tests/                 Tests unitaires
 ```
@@ -689,6 +858,7 @@ sbatch scripts/07_plot_results.sh
 sbatch scripts/08_generate_attacks.sh
 # 09_generate_attacks_jsma_sample.sh est desactive : ne pas le soumettre.
 sbatch scripts/10_evaluate_and_plot_attacks.sh
+sbatch scripts/15_balanced_evaluation.sh
 
 sbatch scripts/11_defense_adversarial_training.sh
 sbatch scripts/12_defense_label_smoothing.sh
@@ -717,21 +887,23 @@ sont des H100. Ces différences ne sont pas versionnées.
 
 ## Attaques adversariales implémentées
 
-Paramètres alignés sur la Table 2 de l'article.
+Paramètres alignés sur la Table 2 de l'article. Générées sur le **substitut**,
+évaluées par transfert sur le baseline.
 
-| Attaque | Référence | Type | Norme | Hyperparamètres |
-|---|---|---|---|---|
-| FGSM | Goodfellow et al., 2014 | Single-step | L∞ | eps=0.2 |
-| BIM | Kurakin et al., 2016 | Iterative | L∞ | eps=0.3, alpha=0.01, 100 iter |
-| PGD | Madry et al., 2017 | Iterative | L∞ | eps=0.3, alpha=0.01, 100 iter |
-| DeepFool | Moosavi-Dezfooli et al., 2015 | Iterative | L2 | epsilon=1e-6 (overshoot), max_iter=100 |
-| JSMA | Papernot et al., 2015 | Feature-based | L0 | theta=0.1, gamma=1.0, untargeted |
-| C&W | Carlini & Wagner, 2016 | Optimization | L2 | max_iter=9, confidence=0.0, untargeted |
+| Attaque | Référence | Type | Norme | Hyperparamètres | Durée (831k) |
+|---|---|---|---|---|---:|
+| FGSM | Goodfellow et al., 2014 | Single-step | L∞ | eps=0.2 | 1.3 s |
+| BIM | Kurakin et al., 2016 | Iterative | L∞ | eps=0.3, alpha=0.01, 100 iter | 1.6 min |
+| PGD | Madry et al., 2017 | Iterative | L∞ | eps=0.3, alpha=0.01, 100 iter | 1.2 min |
+| DeepFool | Moosavi-Dezfooli et al., 2015 | Iterative | L2 | epsilon=1e-6 (overshoot), max_iter=100 | 44.8 min |
+| JSMA | Papernot et al., 2015 | Feature-based | L0 | theta=0.1, gamma=1.0, untargeted | 52.2 min |
+| C&W | Carlini & Wagner, 2016 | Optimization | L2 | max_iter=9, confidence=0.0, untargeted | 72.0 min |
 
 Pour C&W, les paramètres laissés implicites par l'article sont maintenant
 explicites dans la configuration (`binary_search_steps=10`,
 `initial_const=0.01`, `learning_rate=0.01`) plutôt que subis comme défauts
-de bibliothèque.
+de bibliothèque. Avec `max_iter=9`, l'attaque reste probablement sous-itérée
+(voir étape 7).
 
 ## Mécanismes de défense
 
@@ -748,18 +920,35 @@ Quatre défenses combinées dans un ensemble :
 
 ## Résultats de référence (papier Awad et al., CIC-IDS 2017)
 
+Deux tableaux distincts de l'article, à ne pas confondre — la confusion entre
+les deux a causé une erreur documentée au point 8 des correctifs.
+
+**Table 5 — Accuracy du détecteur DNN sous attaque (aucune défense)** :
+
+| Attaque | Accuracy |
+|---|---:|
+| Aucune (clean) | 98.11% |
+| FGSM | 54.50% |
+| BIM | 45.00% |
+| PGD | 46.00% |
+| DeepFool | 53.00% |
+| JSMA | 81.00% |
+| C&W | 36.00% |
+
+**Table 7 — Performance des défenses individuelles et de l'ensemble** :
+
 | Configuration | Accuracy |
 |---|---:|
-| Baseline (données propres) | 98.11% |
-| Baseline sous attaque C&W | 36.00% |
 | Label Smoothing (seul) | 85.90% |
+| Denoising Autoencoder (seul) | 84.80% |
 | Adversarial Training (seul) | 80.25% |
+| Gaussian Augmentation (seul) | 79.80% |
 | Ensemble simple (Majority Voting) | 84.35% |
 | **Ensemble optimisé (Majority Voting)** | **87.49%** |
 
 ## Nos résultats
 
-### Baseline v5 (CIC-IDS 2017) — à jour
+### Baseline v5 sur données propres
 
 | Métrique | Notre baseline | Papier | Écart |
 |---|---:|---:|---:|
@@ -767,15 +956,27 @@ Quatre défenses combinées dans un ensemble :
 | F1 weighted | 99.79% | Non détaillé | — |
 | F1 macro | 84.11% | Non détaillé | — |
 
-### Vulnérabilité sous attaques — provisoire
+### Vulnérabilité sous attaques (semi-white box, test complet 831 864)
 
-Chiffres de l'ancien pipeline (white box, `StandardScaler`, sans
-`clip_values`, baseline v4). Voir le tableau de l'étape 6. À remplacer dès que
-`08_generate_attacks.py` aura tourné sur le pipeline corrigé.
+| Attaque | Accuracy | F1 macro | Papier (Table 5) |
+|---|---:|---:|---:|
+| Clean | 99.79% | 0.8411 | 98.11% |
+| FGSM | 86.75% | 0.1502 | 54.50% |
+| BIM | 87.42% | 0.1621 | 45.00% |
+| PGD | 82.10% | 0.0605 | 46.00% |
+| DeepFool | 86.92% | 0.3291 | 53.00% |
+| JSMA | 83.05% | 0.0605 | 81.00% |
+| C&W | 84.14% | 0.3004 | 36.00% |
+
+**Les accuracies ne sont pas directement comparables** : notre test contient
+83.1 % de BENIGN contre ~50 % pour l'article, ce qui fixe deux planchers
+différents. Voir l'étape 7 pour l'évaluation sur test rééquilibré, qui ramène
+PGD à 3.4 points du chiffre du papier.
 
 ### Résultats des défenses
 
-**En attente** de la régénération de l'étape 6.
+**En attente** — jobs à soumettre. Le F1 macro du baseline sous attaque
+(0.06 à 0.33 selon l'attaque) est la référence à améliorer.
 
 ---
 
