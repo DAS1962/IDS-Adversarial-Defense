@@ -552,13 +552,24 @@ def evaluate_attack(baseline_model, X_adv, y_true, device, name, batch_size, dat
             _, preds = outputs.max(1)
             predictions[i:end] = preds.cpu().numpy()
 
+    # Les moyennes macro sont calculees sur les 15 classes du label_encoder,
+    # pas seulement sur celles presentes dans y_true. Sans labels=, sklearn
+    # restreint la moyenne aux classes vues, ce qui donnait deux F1 macro
+    # differents dans le meme log : celui du resume (classes presentes) et
+    # celui de classification_report (15 classes, les absentes comptant 0).
+    # Sans effet en scope="full" ou les 15 classes sont presentes, mais en
+    # scope="sample" les classes ultra-rares (Heartbleed, SQL Injection)
+    # peuvent etre absentes de l'echantillon.
+    label_encoder = joblib.load(data_dir / "label_encoder.pkl")
+    all_labels = list(range(len(label_encoder.classes_)))
+
     acc = accuracy_score(y_true, predictions)
-    precision_macro = precision_score(y_true, predictions, average="macro", zero_division=0)
-    precision_weighted = precision_score(y_true, predictions, average="weighted", zero_division=0)
-    recall_macro = recall_score(y_true, predictions, average="macro", zero_division=0)
-    recall_weighted = recall_score(y_true, predictions, average="weighted", zero_division=0)
-    f1_macro = f1_score(y_true, predictions, average="macro", zero_division=0)
-    f1_weighted = f1_score(y_true, predictions, average="weighted", zero_division=0)
+    precision_macro = precision_score(y_true, predictions, labels=all_labels, average="macro", zero_division=0)
+    precision_weighted = precision_score(y_true, predictions, labels=all_labels, average="weighted", zero_division=0)
+    recall_macro = recall_score(y_true, predictions, labels=all_labels, average="macro", zero_division=0)
+    recall_weighted = recall_score(y_true, predictions, labels=all_labels, average="weighted", zero_division=0)
+    f1_macro = f1_score(y_true, predictions, labels=all_labels, average="macro", zero_division=0)
+    f1_weighted = f1_score(y_true, predictions, labels=all_labels, average="weighted", zero_division=0)
 
     print(f"  Accuracy               : {acc:.4f}")
     print(f"  Precision (macro)      : {precision_macro:.4f}")
@@ -568,8 +579,6 @@ def evaluate_attack(baseline_model, X_adv, y_true, device, name, batch_size, dat
     print(f"  F1 (macro)             : {f1_macro:.4f}")
     print(f"  F1 (weighted)          : {f1_weighted:.4f}")
 
-    label_encoder = joblib.load(data_dir / "label_encoder.pkl")
-    all_labels = list(range(len(label_encoder.classes_)))
     target_names = [str(c) for c in label_encoder.classes_]
 
     print(f"\n  Rapport par classe pour {name} :")
