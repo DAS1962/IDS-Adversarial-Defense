@@ -1,414 +1,358 @@
 """
-Défense par Adversarial Training (AT).
+Defense par Adversarial Training (AT).
 
-Le modèle est entraîné sur un mélange 50/50 d'exemples propres et d'exemples
-adversariaux générés à la volée avec FGSM. Après l'entraînement, on évalue
-le modèle sur les données propres et sur les 6 attaques adversariales.
+Le modele est entraine sur un melange clean / adversarial, les exemples
+adversariaux etant generes a la volee sur le modele en cours
+d'entrainement.
 
-Référence : Madry et al. 2018, Awad et al. 2025.
+Reference : Madry et al. 2018 ; Awad et al. 2025 (Algorithme 4).
+
+Pourquoi PGD et non FGSM
+-------------------------
+La premiere version generait les exemples d'entrainement avec FGSM en un
+seul pas. Resultat mesure : +0.137 de F1 macro contre FGSM, mais +0.011
+contre PGD et +0.001 contre JSMA. La defense protegeait uniquement contre
+l'attaque exacte sur laquelle elle s'entrainait, signature du masquage de
+gradient decrit par Madry et al. 2018 - la reference que l'article cite
+pour cette defense, et qui recommande explicitement PGD avec plusieurs pas
+et depart aleatoire.
+
+Le passage a PGD a porte le gain moyen de +0.0656 a +0.0986. Le gain vient
+surtout de FGSM (+0.169), DeepFool (+0.035) et C&W (+0.043) ; BIM regresse
+de 0.049 et PGD reste inchange, donc le masquage de gradient n'etait pas la
+seule limite.
+
+L'article ne documente ni epsilon ni le nombre de pas de son attaque
+d'entrainement (l'Algorithme 4 mentionne seulement "adversarial examples").
+Les valeurs viennent de configs/config.yaml, avec eps=0.2 reprenant la
+Table 2 et alpha = 2.5*eps/steps suivant la regle usuelle.
+
+Label smoothing applique a l'entrainement
+------------------------------------------
+L'article n'utilise pas le label smoothing comme une defense parallele aux
+trois autres, mais comme une couche appliquee en dessous. L'Algorithme 4
+prescrit "train the IDS classifier with the Gaussian augmented dataset and
+smooth train labels", et la section "Defense strategies" precise que les
+defenses sont ameliorees "particularly when trained with smoothed labels".
+
+La version precedente utilisait nn.CrossEntropyLoss() sans lissage, ce qui
+s'ecartait du protocole.
+
+TROIS criterions distincts sont necessaires ici, et les confondre serait un
+bug silencieux :
+
+  criterion_train  avec lissage. C'est la loss optimisee par la descente
+                   de gradient.
+
+  criterion_attack SANS lissage. Il sert a generer les exemples PGD. Lisser
+                   les labels pendant la generation modifierait la
+                   direction du gradient d'attaque, donc la nature meme des
+                   exemples adversariaux produits : on ne s'entrainerait
+                   plus contre PGD mais contre une attaque differente et
+                   non documentee.
+
+  criterion_eval   SANS lissage. Pour que la loss de validation mesure la
+                   performance reelle et non la loss adoucie, ce qui
+                   affecterait aussi le scheduler.
+
+Note sur le protocole
+---------------------
+Les exemples d'entrainement sont generes en WHITE BOX sur le modele
+lui-meme. Ce n'est pas contradictoire avec le protocole semi-white box de
+08_generate_attacks.py : la defense s'entraine contre le pire cas,
+l'evaluation mesure un attaquant realiste qui ne connait pas les poids.
+
+Les exemples sont bornes dans clip_values apres chaque pas, coherent avec
+le domaine produit par MinMaxScaler.
 """
 
 import sys
 import time
+from datetime import datetime
+from pathlib import Path
+
 import joblib
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
-from pathlib import Path
-from datetime import datetime
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    classification_report,
-    confusion_matrix,
-)
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.models.dnn import BaselineDNN
+from src.utils.config import load_config, check_data_fingerprint
+from src.defenses.common import (
+    load_splits,
+    evaluate_loader,
+    evaluate_on_attacks,
+    print_summary,
+)
 
 
-DATA_DIR = Path("data/processed")
-CHECKPOINT_DIR = Path("results/checkpoints")
-LOG_DIR = Path("results/logs")
-ATTACKS_DIR = Path("results/attacks")
+def pgd_attack(model, x, y, criterion_attack, eps, alpha, steps, clip_values,
+               random_start=True):
+    """
+    PGD : plusieurs pas de gradient projetes dans la boule L-infini de
+    rayon eps autour de x, puis bornes dans le domaine des features.
 
-# Hyperparamètres de l'entraînement
-EPOCHS = 50
-BATCH_SIZE = 128
-LR_INIT = 0.001
-LR_MIN = 1e-5
-LR_PATIENCE = 5
-LR_FACTOR = 0.5
-RANDOM_STATE = 42
+    criterion_attack doit etre SANS label smoothing (voir l'en-tete du
+    module) : le gradient d'attaque doit pointer vers la vraie classe, pas
+    vers une distribution adoucie.
 
-# Hyperparamètres de l'attaque FGSM utilisée pendant l'entraînement
-FGSM_EPSILON = 0.05
-ADV_RATIO = 0.5
+    Le depart aleatoire evite que l'attaque parte toujours du meme point,
+    ce qui rendrait l'entrainement exploitable par le modele.
+    """
+    borne_min, borne_max = clip_values
+    x_orig = x.detach()
 
-# Architecture
-NUM_CLASSES = 15
-INPUT_DIM = 58
+    if random_start:
+        x_adv = x_orig + torch.empty_like(x_orig).uniform_(-eps, eps)
+        x_adv = torch.clamp(x_adv, borne_min, borne_max).detach()
+    else:
+        x_adv = x_orig.clone().detach()
 
-# Fichiers X_adv pour l'évaluation finale
-ATTACK_FILES = [
-    ("FGSM", "X_adv_fgsm.pkl"),
-    ("BIM", "X_adv_bim.pkl"),
-    ("PGD", "X_adv_pgd.pkl"),
-    ("DeepFool", "X_adv_deepfool.pkl"),
-    ("JSMA", "X_adv_jsma.pkl"),
-    ("CW", "X_adv_cw.pkl"),
-]
+    for _ in range(steps):
+        x_adv.requires_grad_(True)
+        loss = criterion_attack(model(x_adv), y)
+        grad = torch.autograd.grad(loss, x_adv)[0]
+        x_adv = x_adv.detach() + alpha * grad.sign()
+        # Projection dans la boule L-infini autour de l'original
+        x_adv = x_orig + torch.clamp(x_adv - x_orig, -eps, eps)
+        # Puis dans le domaine des features
+        x_adv = torch.clamp(x_adv, borne_min, borne_max).detach()
 
-
-def load_data():
-    """Charge les données d'entraînement et de test."""
-    print("Chargement des données...")
-    X_train = pd.read_pickle(DATA_DIR / "X_train.pkl")
-    y_train = pd.read_pickle(DATA_DIR / "y_train.pkl")
-    X_test = pd.read_pickle(DATA_DIR / "X_test.pkl")
-    y_test = pd.read_pickle(DATA_DIR / "y_test.pkl")
-
-    if isinstance(X_train, pd.DataFrame):
-        X_train = X_train.values.astype(np.float32)
-    if isinstance(X_test, pd.DataFrame):
-        X_test = X_test.values.astype(np.float32)
-    if isinstance(y_train, pd.Series):
-        y_train = y_train.values
-    if isinstance(y_test, pd.Series):
-        y_test = y_test.values
-
-    print(f"  X_train : {X_train.shape}")
-    print(f"  X_test  : {X_test.shape}")
-    print()
-    return X_train, y_train, X_test, y_test
+    return x_adv
 
 
-def make_loaders(X_train, y_train, X_test, y_test):
-    """Crée les DataLoaders."""
-    train_ds = TensorDataset(
-        torch.from_numpy(X_train).float(),
-        torch.from_numpy(y_train).long(),
-    )
-    test_ds = TensorDataset(
-        torch.from_numpy(X_test).float(),
-        torch.from_numpy(y_test).long(),
-    )
-    train_loader = DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=True,
-        num_workers=2, pin_memory=True,
-    )
-    test_loader = DataLoader(
-        test_ds, batch_size=BATCH_SIZE, shuffle=False,
-        num_workers=2, pin_memory=True,
-    )
-    return train_loader, test_loader
-
-
-def fgsm_attack(model, x, y, epsilon, criterion):
-    """Génère un exemple adversarial avec FGSM (une seule étape)."""
+def fgsm_attack(model, x, y, criterion_attack, eps, clip_values):
+    """FGSM en un pas, conserve pour comparaison via defenses.attack."""
+    borne_min, borne_max = clip_values
     x_adv = x.clone().detach().requires_grad_(True)
-    logits = model(x_adv)
-    loss = criterion(logits, y)
+    loss = criterion_attack(model(x_adv), y)
     grad = torch.autograd.grad(loss, x_adv)[0]
-    x_adv = x_adv.detach() + epsilon * grad.sign()
-    return x_adv.detach()
+    x_adv = x_adv.detach() + eps * grad.sign()
+    return torch.clamp(x_adv, borne_min, borne_max).detach()
 
 
-def train_one_epoch(model, loader, optimizer, criterion, device, epsilon, adv_ratio):
-    """Entraîne le modèle une epoch avec mélange propre/adversarial."""
+def train_one_epoch(model, loader, optimizer, criterion_train,
+                    criterion_attack, device, at_cfg, clip_values):
+    """
+    Une epoch sur un melange clean / adversarial.
+
+    criterion_train porte le lissage et sert a la descente de gradient.
+    criterion_attack n'en porte pas et sert a generer les exemples.
+    """
     model.train()
-    total_loss = 0.0
-    total_correct = 0
-    total_seen = 0
+    total_loss, total_correct, total_seen = 0.0, 0, 0
+
+    methode = at_cfg["attack"].upper()
+    eps = at_cfg["eps"]
+    ratio = at_cfg["ratio"]
 
     for x, y in loader:
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
 
         n = x.size(0)
-        n_adv = int(n * adv_ratio)
+        n_adv = int(n * ratio)
 
-        # On génère les adversariaux pour la moitié du batch
         if n_adv > 0:
             idx = torch.randperm(n, device=device)
-            idx_adv = idx[:n_adv]
-            idx_clean = idx[n_adv:]
+            idx_adv, idx_clean = idx[:n_adv], idx[n_adv:]
 
-            # Mode eval pour désactiver le dropout pendant la génération
+            # eval() pendant la generation : desactive dropout et batchnorm
+            # pour que le gradient corresponde au modele en inference.
             model.eval()
-            x_adv = fgsm_attack(model, x[idx_adv], y[idx_adv], epsilon, criterion)
+            if methode == "PGD":
+                x_adv = pgd_attack(
+                    model, x[idx_adv], y[idx_adv], criterion_attack,
+                    eps=eps, alpha=at_cfg["alpha"], steps=at_cfg["steps"],
+                    clip_values=clip_values,
+                    random_start=at_cfg.get("random_start", True),
+                )
+            elif methode == "FGSM":
+                x_adv = fgsm_attack(model, x[idx_adv], y[idx_adv],
+                                    criterion_attack, eps, clip_values)
+            else:
+                raise ValueError(
+                    f"defenses.AdversarialTraining.attack vaut {methode!r}, "
+                    f"attendu 'PGD' ou 'FGSM'."
+                )
             model.train()
 
-            # Batch mélangé : moitié propre + moitié adversarial
             x_batch = torch.cat([x[idx_clean], x_adv], dim=0)
             y_batch = torch.cat([y[idx_clean], y[idx_adv]], dim=0)
         else:
-            x_batch = x
-            y_batch = y
+            x_batch, y_batch = x, y
 
         optimizer.zero_grad()
         logits = model(x_batch)
-        loss = criterion(logits, y_batch)
+        loss = criterion_train(logits, y_batch)
         loss.backward()
         optimizer.step()
 
-        preds = logits.argmax(dim=1)
         total_loss += loss.item() * y_batch.size(0)
-        total_correct += (preds == y_batch).sum().item()
+        total_correct += (logits.argmax(dim=1) == y_batch).sum().item()
         total_seen += y_batch.size(0)
 
     return total_loss / total_seen, total_correct / total_seen
 
 
-def evaluate(model, loader, criterion, device):
-    """Évalue le modèle sur un DataLoader."""
-    model.eval()
-    total_loss = 0.0
-    total_correct = 0
-    total_seen = 0
-
-    with torch.no_grad():
-        for x, y in loader:
-            x = x.to(device, non_blocking=True)
-            y = y.to(device, non_blocking=True)
-            logits = model(x)
-            loss = criterion(logits, y)
-            total_loss += loss.item() * y.size(0)
-            total_correct += (logits.argmax(dim=1) == y).sum().item()
-            total_seen += y.size(0)
-
-    return total_loss / total_seen, total_correct / total_seen
-
-
-def predict_array(model, X, device):
-    """Prédit sur un array numpy en batchs."""
-    model.eval()
-    n = len(X)
-    preds = np.zeros(n, dtype=np.int64)
-
-    with torch.no_grad():
-        for i in range(0, n, BATCH_SIZE):
-            end = min(i + BATCH_SIZE, n)
-            xb = torch.tensor(X[i:end], dtype=torch.float32).to(device)
-            preds[i:end] = model(xb).argmax(dim=1).cpu().numpy()
-
-    return preds
-
-
-def compute_metrics(y_true, y_pred, name):
-    """Calcule les métriques standards pour un dataset."""
-    acc = accuracy_score(y_true, y_pred)
-    prec_macro = precision_score(y_true, y_pred, average="macro", zero_division=0)
-    prec_wght = precision_score(y_true, y_pred, average="weighted", zero_division=0)
-    rec_macro = recall_score(y_true, y_pred, average="macro", zero_division=0)
-    rec_wght = recall_score(y_true, y_pred, average="weighted", zero_division=0)
-    f1_macro = f1_score(y_true, y_pred, average="macro", zero_division=0)
-    f1_wght = f1_score(y_true, y_pred, average="weighted", zero_division=0)
-
-    return {
-        "attack": name,
-        "accuracy": acc,
-        "precision_macro": prec_macro,
-        "precision_weighted": prec_wght,
-        "recall_macro": rec_macro,
-        "recall_weighted": rec_wght,
-        "f1_macro": f1_macro,
-        "f1_weighted": f1_wght,
-        "confusion_matrix": confusion_matrix(y_true, y_pred, labels=list(range(NUM_CLASSES))),
-    }
-
-
-def print_metrics(m):
-    """Affiche les métriques d'une évaluation."""
-    print(f"  Accuracy               : {m['accuracy']:.4f}")
-    print(f"  Precision (macro)      : {m['precision_macro']:.4f}")
-    print(f"  Precision (weighted)   : {m['precision_weighted']:.4f}")
-    print(f"  Recall (macro)         : {m['recall_macro']:.4f}")
-    print(f"  Recall (weighted)      : {m['recall_weighted']:.4f}")
-    print(f"  F1 (macro)             : {m['f1_macro']:.4f}")
-    print(f"  F1 (weighted)          : {m['f1_weighted']:.4f}")
-
-
-def print_summary(results):
-    """Affiche le tableau récapitulatif final."""
-    print("\n" + "=" * 100)
-    print("Résumé - Défense Adversarial Training")
-    print("=" * 100)
-    header = (
-        f"{'Attaque':<12} {'Accuracy':>10} {'Prec. macro':>12} "
-        f"{'Rec. macro':>11} {'F1 macro':>10} {'F1 wght':>10}"
-    )
-    print(header)
-    print("-" * 100)
-    for r in results:
-        print(
-            f"{r['attack']:<12} {r['accuracy']:>10.4f} "
-            f"{r['precision_macro']:>12.4f} {r['recall_macro']:>11.4f} "
-            f"{r['f1_macro']:>10.4f} {r['f1_weighted']:>10.4f}"
-        )
-    print("=" * 100)
-
-
 def main():
     print("=" * 70)
-    print("Défense par Adversarial Training (AT)")
+    print("Defense par Adversarial Training (AT) + Label Smoothing")
     print(f"Date : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 70)
+    print("=" * 70 + "\n")
+
+    cfg = load_config()
+    print(cfg.resume())
     print()
 
-    # Reproductibilité
-    torch.manual_seed(RANDOM_STATE)
-    np.random.seed(RANDOM_STATE)
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
 
-    # Device
+    data_dir = Path(cfg.paths["data_processed"])
+    checkpoint_dir = Path(cfg.paths["checkpoints"])
+    log_dir = Path(cfg.paths["logs"])
+    attacks_dir = Path(cfg.paths["attacks"])
+
+    check_data_fingerprint(cfg, data_dir)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device : {device}")
     if device.type == "cuda":
         print(f"GPU    : {torch.cuda.get_device_name(0)}")
     print()
 
-    # Chargement des données
-    X_train, y_train, X_test, y_test = load_data()
-    train_loader, test_loader = make_loaders(X_train, y_train, X_test, y_test)
-    print(f"Batches train : {len(train_loader):,}")
-    print(f"Batches test  : {len(test_loader):,}")
-    print()
+    X_train, y_train, X_val, y_val, X_test, y_test = load_splits(data_dir)
 
-    # Modèle
-    print("Création du modèle...")
-    model = BaselineDNN(input_dim=INPUT_DIM, hidden1=512, hidden2=256, output_dim=NUM_CLASSES)
-    model = model.to(device)
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"  Paramètres : {n_params:,}")
-    print()
+    batch_size = cfg.training["batch_size"]
+    eval_batch = cfg.evaluation["batch_size"]
+    epochs = cfg.training["epochs"]
+    lr_init = cfg.training["learning_rate"]
+    sched = cfg.training["scheduler"]
+    at_cfg = cfg.defenses["AdversarialTraining"]
+    clip_values = cfg.clip_values
+    # Partage avec la defense LS : l'article traite le lissage comme une
+    # couche commune aux defenses, pas comme un parametre propre a chacune.
+    alpha = cfg.defenses["LabelSmoothing"]["alpha"]
 
-    # Optimizer et scheduler
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR_INIT)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", factor=LR_FACTOR,
-        patience=LR_PATIENCE, min_lr=LR_MIN,
+    train_loader = DataLoader(
+        TensorDataset(torch.from_numpy(X_train).float(),
+                      torch.from_numpy(y_train).long()),
+        batch_size=batch_size, shuffle=True,
+        num_workers=cfg.env["num_workers"], pin_memory=True,
+    )
+    val_loader = DataLoader(
+        TensorDataset(torch.from_numpy(X_val).float(),
+                      torch.from_numpy(y_val).long()),
+        batch_size=batch_size, shuffle=False,
+        num_workers=cfg.env["num_workers"], pin_memory=True,
     )
 
-    # Entraînement
-    print("Début de l'entraînement adversarial")
-    print(f"  Epochs            : {EPOCHS}")
-    print(f"  Learning rate init: {LR_INIT}")
-    print(f"  FGSM epsilon      : {FGSM_EPSILON}")
-    print(f"  Ratio adversarial : {ADV_RATIO:.0%}")
-    print(f"  Batch size        : {BATCH_SIZE}")
-    print()
+    model = BaselineDNN(
+        input_dim=cfg.dataset["num_features"],
+        hidden1=cfg.model["hidden_layers"][0],
+        hidden2=cfg.model["hidden_layers"][1],
+        output_dim=cfg.dataset["num_classes"],
+    ).to(device)
+    print(f"Modele : {sum(p.numel() for p in model.parameters()):,} parametres\n")
 
-    history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": [], "lr": []}
-    best_acc = 0.0
-    best_epoch = -1
-    ckpt_path = CHECKPOINT_DIR / "defense_at_best.pth"
-    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    criterion_train = nn.CrossEntropyLoss(label_smoothing=alpha)
+    criterion_attack = nn.CrossEntropyLoss()
+    criterion_eval = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr_init)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=sched["factor"],
+        patience=sched["patience"], min_lr=sched["min_lr"],
+    )
 
-    start_train = time.time()
+    print("Entrainement adversarial")
+    print(f"  Epochs             : {epochs}")
+    print(f"  Learning rate init : {lr_init}")
+    print(f"  Attaque            : {at_cfg['attack']}")
+    print(f"  Epsilon            : {at_cfg['eps']}")
+    if at_cfg["attack"].upper() == "PGD":
+        print(f"  Pas                : {at_cfg['steps']} x alpha={at_cfg['alpha']}")
+        print(f"  Depart aleatoire   : {at_cfg.get('random_start', True)}")
+    print(f"  Ratio adversarial  : {at_cfg['ratio']:.0%}")
+    print(f"  Label smoothing    : {alpha} (Algorithme 4 de l'article)")
+    print(f"    entrainement : lisse | generation d'attaque : non lisse")
+    print(f"  Bornes             : {clip_values}")
+    print(f"  Batch size         : {batch_size}")
+    print("  Selection modele   : val_acc (validation, jamais le test)\n")
 
-    for epoch in range(1, EPOCHS + 1):
+    history = {"train_loss": [], "train_acc": [], "val_loss": [],
+                "val_acc": [], "lr": []}
+    best_val_acc, best_epoch = 0.0, -1
+    ckpt_path = checkpoint_dir / "defense_at_best.pth"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    debut = time.time()
+
+    for epoch in range(1, epochs + 1):
         t0 = time.time()
-        train_loss, train_acc = train_one_epoch(
-            model, train_loader, optimizer, criterion,
-            device, FGSM_EPSILON, ADV_RATIO,
-        )
-        test_loss, test_acc = evaluate(model, test_loader, criterion, device)
-        scheduler.step(test_acc)
         lr_now = optimizer.param_groups[0]["lr"]
-        elapsed = time.time() - t0
-
-        history["train_loss"].append(train_loss)
-        history["train_acc"].append(train_acc)
-        history["test_loss"].append(test_loss)
-        history["test_acc"].append(test_acc)
-        history["lr"].append(lr_now)
-
-        print(
-            f"Epoch {epoch:2d}/{EPOCHS} | lr={lr_now:.6f} | "
-            f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} | "
-            f"test_loss={test_loss:.4f} test_acc={test_acc:.4f} | "
-            f"time={elapsed:.1f}s",
-            flush=True,
+        train_loss, train_acc = train_one_epoch(
+            model, train_loader, optimizer, criterion_train,
+            criterion_attack, device, at_cfg, clip_values,
         )
+        val_loss, val_acc = evaluate_loader(model, val_loader,
+                                            criterion_eval, device)
+        scheduler.step(val_loss)
 
-        if test_acc > best_acc:
-            best_acc = test_acc
-            best_epoch = epoch
+        for cle, val in zip(history, (train_loss, train_acc, val_loss,
+                                      val_acc, lr_now)):
+            history[cle].append(val)
+
+        print(f"Epoch {epoch:3d}/{epochs} | lr={lr_now:.6f} | "
+              f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} | "
+              f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} | "
+              f"{time.time()-t0:.1f}s", flush=True)
+
+        if val_acc > best_val_acc:
+            best_val_acc, best_epoch = val_acc, epoch
             torch.save({
                 "model_state_dict": model.state_dict(),
-                "epoch": epoch,
-                "test_acc": test_acc,
+                "epoch": epoch, "val_acc": val_acc, "val_loss": val_loss,
+                "config_hash": cfg.baseline_fingerprint(),
+                "defense": "AdversarialTraining",
+                "at_config": dict(at_cfg), "label_smoothing": alpha,
             }, ckpt_path)
-            print(f"           -> Nouveau meilleur modèle sauvegardé ({test_acc:.4f})", flush=True)
+            print(f"            -> meilleur modele sauvegarde "
+                  f"(val_acc={val_acc:.4f})", flush=True)
 
-    train_time_min = (time.time() - start_train) / 60
-    print()
-    print(f"Entraînement terminé en {train_time_min:.1f} min")
-    print(f"Meilleur epoch : {best_epoch} | test_acc = {best_acc:.4f}")
-    print()
+    duree = (time.time() - debut) / 60
+    print(f"\nEntrainement termine en {duree:.1f} min")
+    print(f"Meilleur epoch : {best_epoch} | val_acc = {best_val_acc:.4f}\n")
 
-    # Chargement du meilleur modèle
-    print("Chargement du meilleur modèle pour évaluation...")
     checkpoint = torch.load(ckpt_path, weights_only=False, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
-    # Évaluation sur données propres et attaques
-    print()
     print("=" * 70)
-    print("Évaluation sur données propres et attaques adversariales")
+    print("Evaluation sur donnees propres et attaques adversariales")
     print("=" * 70)
 
-    all_results = []
+    all_labels = list(range(cfg.dataset["num_classes"]))
+    resultats = evaluate_on_attacks(model, X_test, y_test, device, eval_batch,
+                                    attacks_dir, all_labels)
+    print_summary(resultats, f"Adversarial Training ({at_cfg['attack']}) + LS")
 
-    print("\n--- Données propres ---")
-    y_pred_clean = predict_array(model, X_test, device)
-    clean_metrics = compute_metrics(y_test, y_pred_clean, "Clean")
-    print_metrics(clean_metrics)
-    all_results.append(clean_metrics)
-
-    for name, x_file in ATTACK_FILES:
-        x_path = ATTACKS_DIR / x_file
-        if not x_path.exists():
-            print(f"\n--- {name} ---")
-            print(f"  Fichier {x_file} non trouvé, skip")
-            continue
-
-        print(f"\n--- {name} ---")
-        X_adv = joblib.load(x_path)
-        y_pred = predict_array(model, X_adv, device)
-        m = compute_metrics(y_test, y_pred, name)
-        print_metrics(m)
-        all_results.append(m)
-        del X_adv
-
-    print_summary(all_results)
-
-    # Sauvegarde des résultats
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = LOG_DIR / f"defense_at_{timestamp}.pkl"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    horodatage = datetime.now().strftime("%Y%m%d_%H%M%S")
+    sortie = log_dir / f"defense_at_{horodatage}.pkl"
     joblib.dump({
-        "results": all_results,
-        "history": history,
+        "results": resultats, "history": history,
         "hyperparameters": {
-            "epochs": EPOCHS,
-            "batch_size": BATCH_SIZE,
-            "lr_init": LR_INIT,
-            "fgsm_epsilon": FGSM_EPSILON,
-            "adv_ratio": ADV_RATIO,
-            "seed": RANDOM_STATE,
+            "epochs": epochs, "batch_size": batch_size, "lr_init": lr_init,
+            "at_config": dict(at_cfg), "label_smoothing": alpha,
+            "clip_values": list(clip_values), "seed": cfg.seed,
         },
-        "best_epoch": best_epoch,
-        "training_time_min": train_time_min,
-    }, out_path)
-    print(f"\nRésultats sauvegardés : {out_path}")
-    print("\nDéfense Adversarial Training terminée")
+        "best_epoch": best_epoch, "best_val_acc": best_val_acc,
+        "training_time_min": duree,
+        "config_hash": cfg.baseline_fingerprint(),
+    }, sortie)
+    print(f"\nResultats sauvegardes : {sortie}")
+    print("\nDefense Adversarial Training terminee")
 
 
 if __name__ == "__main__":

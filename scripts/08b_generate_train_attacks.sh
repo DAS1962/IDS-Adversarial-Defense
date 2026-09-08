@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=defense_ls
+#SBATCH --job-name=gen_train_adv
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --mem=48G
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=01:30:00
+#SBATCH --time=03:00:00
 #SBATCH --output=results/logs/slurm_%j.out
 #SBATCH --error=results/logs/slurm_%j.err
 
@@ -24,7 +24,7 @@ module load python/3.11
 source ~/ENV/bin/activate
 cd ~/IDS-Adversarial-Defense
 
-python -u scripts/12_defense_label_smoothing.py
+python -u scripts/08b_generate_train_attacks.py
 statut=$?
 
 echo
