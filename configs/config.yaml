@@ -202,17 +202,95 @@ evaluation:
 
 # ---------- Defenses ----------
 defenses:
+  # Adversarial training. L'article (Algorithme 4) ne documente ni epsilon
+  # ni le nombre de pas de l'attaque d'entrainement. Choix retenu : PGD a
+  # 7 pas plutot que FGSM en un pas. Madry et al. 2018, que l'article cite
+  # en reference pour cette defense, montre que FGSM a un pas conduit au
+  # masquage de gradient : le modele apprend a rendre ses gradients
+  # inexploitables en un pas sans devenir reellement robuste, et la defense
+  # ne transfere pas aux attaques iteratives. C'est exactement ce qu'on
+  # observait : +0.137 de F1 macro contre FGSM mais +0.011 contre PGD.
+  #
+  # eps=0.2 reprend la valeur FGSM de la Table 2, alpha = 2.5*eps/steps
+  # suit la regle usuelle de Madry et al. pour couvrir la boule epsilon.
   AdversarialTraining:
-    attack: "FGSM"
+    attack: "PGD"
     ratio: 0.5
+    eps: 0.2
+    steps: 7
+    alpha: 0.071
+    random_start: true
   GaussianAugmentation:
     sigma: 0.1
   LabelSmoothing:
     alpha: 0.1
+  # Denoising autoencoder. L'article (Algorithme 5, etape 2) entraine le DAE
+  # sur "total samples by concatenating (adv examples, real samples)" et sa
+  # fonction objectif est min E[||g(x + x_adv) - x||^2] : le DAE doit
+  # reconstruire l'echantillon propre depuis l'echantillon ADVERSARIAL, pas
+  # seulement depuis une version bruitee au hasard. La version precedente ne
+  # voyait que du bruit gaussien : c'etait un debruiteur gaussien, pas un
+  # purificateur adversarial, d'ou son echec (-0.036 de F1 macro).
+  #
+  # adv_ratio : proportion du batch remplacee par des exemples adversariaux
+  # generes a la volee. Le reste recoit du bruit gaussien, ce qui conserve
+  # la capacite de debruitage generique.
+  # hidden_dim et noise_factor sont conserves : l'article ne les documente
+  # pas et rien n'indique qu'ils soient en cause.
+  # v4. Trois versions precedentes ont echoue avec un diagnostic mesure :
+  # le DAE modifiait 31.5% de la variance d'une entree PROPRE (MSE 0.00719
+  # entre x et DAE(x) sans aucune corruption), 29 features sur 58 perdaient
+  # plus de la moitie de leur ecart-type, et le F1 macro chutait de 0.8527 a
+  # 0.2109. Cause : le batch d'entrainement etait corrompu a 100%, donc le
+  # reseau n'a jamais appris a laisser passer une entree propre. Il applique
+  # sa correction a des donnees qui n'en ont pas besoin et sur-corrige.
+  #
+  # clean_ratio : fraction du batch laissee intacte (paires propre -> propre).
+  # L'Algorithme 5 de l'article le prescrit explicitement : "Construct total
+  # samples by concatenating (adv examples, real samples)".
+  #
+  # noise_factor a 0 : le bruit gaussien etait un ajout de notre part, absent
+  # de l'Algorithme 5. A sigma=0.1 il portait le plancher theorique de
+  # reconstruction (Wiener) a 17% de la variance des donnees, contre 1.2% a
+  # sigma=0.02. Le DAE plafonnait a 0.0073, soit moins du double de ce
+  # plancher : la tache elle-meme etait quasi impossible.
+  # v6. Deux changements par rapport a v5.
+  #
+  # hidden_dim 32 -> 40, avec deux couches cachees par cote au lieu d'une
+  # (58-52-46-40-46-52-58, ~14 800 parametres contre 8 280). Test de
+  # l'hypothese d'une limite de capacite.
+  #
+  # loss_normalisee : la MSE brute etait dominee par JSMA. Mesure des
+  # amplitudes de corruption par 08b, converties en MSE par feature :
+  #   jsma     0.761196  (33x la variance des donnees)
+  #   fgsm     0.006443
+  #   bim      0.002511
+  #   deepfool 0.000037
+  # Avec un batch a 50% propre et 12.5% par attaque, JSMA representait
+  # 98.8% de la loss pour un gain en F1 macro de +0.002, alors que FGSM
+  # (+0.168), BIM (+0.137) et DeepFool (+0.103) se partageaient 1.1%. Le
+  # DAE consacrait donc tout son effort a une attaque qu'il ne corrige pas,
+  # et la projection agressive qui en resultait detruisait aussi les
+  # entrees saines (-0.39 de F1 macro sur donnees propres).
+  # La loss normalisee divise l'erreur de chaque groupe par l'amplitude de
+  # sa propre corruption, puis moyenne les cinq groupes : chacun pese 20%.
+  # L'Algorithme 5 impose de concatener les quatre attaques, ce qui reste
+  # le cas ; il ne specifie pas la ponderation de l'esperance.
   DenoisingAutoencoder:
-    hidden_dim: 32
+    hidden_dim: 40
+    loss_normalisee: true
     l1_reg: 1.0e-4
-    noise_factor: 0.1
+    noise_factor: 0.0
+    clean_ratio: 0.5
+    adv_ratio: 0.5
+    adv_eps: 0.05
+    # Taille du sous-echantillon stratifie du train sur lequel 08b genere
+    # les exemples adversariaux d'entrainement du DAE. Les quatre attaques
+    # de l'Algorithme 5 sur les 1 819 198 lignes du train couteraient environ
+    # quatre heures de GPU (DeepFool ~1h40, JSMA ~2h extrapolees des mesures
+    # de 08 sur le test complet). 400 000 lignes stratifiees couvrent les
+    # quinze classes et suffisent a apprendre une fonction de purification.
+    train_adv_samples: 400000
 
 # ---------- Ensemble ----------
 ensemble:
