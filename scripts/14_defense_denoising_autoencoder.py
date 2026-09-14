@@ -145,25 +145,24 @@ class DenoisingAutoencoder(nn.Module):
     def __init__(self, input_dim=58, bottleneck_dim=40, clip_values=(0.0, 1.0)):
         super().__init__()
         self.borne_min, self.borne_max = clip_values
-        ecart = input_dim - bottleneck_dim
-        h1 = input_dim - ecart // 3
-        h2 = input_dim - 2 * ecart // 3
+        # Architecture du v5, conservee comme version de reference.
+        # Le v6 ajoutait une couche cachee par cote (58-52-46-40-46-52-58) ;
+        # il a ete abandonne, sa loss normalisee par groupe donnant 95.8 % du
+        # gradient a DeepFool, dont la perturbation (0.000194) est 19 fois
+        # inferieure au plancher de bruit du DAE lui-meme (0.003742).
+        hidden = (input_dim + bottleneck_dim) // 2
 
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, h1),
+            nn.Linear(input_dim, hidden),
             nn.ReLU(),
-            nn.Linear(h1, h2),
-            nn.ReLU(),
-            nn.Linear(h2, bottleneck_dim),
+            nn.Linear(hidden, bottleneck_dim),
         )
         self.decoder = nn.Sequential(
-            nn.Linear(bottleneck_dim, h2),
+            nn.Linear(bottleneck_dim, hidden),
             nn.ReLU(),
-            nn.Linear(h2, h1),
-            nn.ReLU(),
-            nn.Linear(h1, input_dim),
+            nn.Linear(hidden, input_dim),
         )
-        self.dims = (input_dim, h1, h2, bottleneck_dim)
+        self.dims = (input_dim, hidden, hidden, bottleneck_dim)
 
     def forward(self, x):
         latent = self.encoder(x)
