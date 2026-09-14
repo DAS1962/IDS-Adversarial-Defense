@@ -44,9 +44,8 @@ Le projet suit les 9 étapes du framework proposé par Awad et al. (2025) :
 | 8 | Mécanismes de défense | **Terminée** (7-8 sept. 2026) |
 | 9 | Agrégation par ensemble | **Terminée** (8 sept. 2026) |
 
-Le pipeline complet a été exécuté de bout en bout. Une version 6 du DAE, avec
-loss normalisée par groupe et réseau élargi, est en file d'attente ; les
-résultats documentés ici sont ceux de la v5.
+Le pipeline complet a été exécuté de bout en bout. Une version 6 du DAE a été tentée puis
+abandonnée (voir étape 8) ; la version retenue est la v5.
 
 ---
 
@@ -519,6 +518,9 @@ constitue une part du travail.
 | v3 | 0.1820 | −0.053 | + profondeur, goulot **linéaire** |
 | v4 | 0.8411 | 0.0000 | + résidu initialisé à l'identité, fraction propre |
 | **v5** | 0.4498 | **+0.0737** | + 4 attaques réelles, reconstruction complète |
+| v6 | 0.1726* | abandonnée | + loss normalisée par groupe, goulot élargi à 40 |
+
+*\*F1 macro moyen sur validation propre et quatre attaques du train ; aucune epoch n'a battu la référence de 0.3515, donc aucun checkpoint n'a été écrit.*
 
 **v1 et v2 : mauvaise source de corruption.** Le DAE était entraîné sur du
 bruit gaussien ou un FGSM approximatif régénéré à la volée. Or l'Algorithme 5
@@ -579,21 +581,55 @@ l'autre attaque absente, régresse de 0.057.
 Mais le coût sur les données propres est de −0.39 : le DAE détruit encore de
 l'information sur des entrées saines.
 
-**v6, en file d'attente.** Le diagnostic de la v5 montre que la MSE brute est
-dominée par JSMA. Amplitudes converties en MSE par feature :
+**v6, tentée et abandonnée.** Le diagnostic de la v5 montrait que la MSE
+brute était dominée par JSMA. Amplitudes converties en MSE par feature :
 
-| Groupe | MSE de corruption | Part de la loss | Gain en F1 macro |
+| Groupe | MSE de corruption | Part de la loss v5 | Gain en F1 macro (v5) |
 |---|---:|---:|---:|
 | **JSMA** | 0.761196 | **98.8 %** | **+0.002** |
 | FGSM | 0.006443 | 0.8 % | +0.168 |
 | BIM | 0.002511 | 0.3 % | +0.137 |
 | DeepFool | 0.000037 | 0.0 % | +0.103 |
 
-Un seul échantillon JSMA pèse autant que cent échantillons FGSM. Le DAE
-consacrait donc la quasi-totalité de son effort à l'unique attaque qu'il ne
-corrige pas. La v6 normalise la loss par groupe — chacun pèse 20 % — et
-élargit le réseau à 40 de goulot avec deux couches cachées par côté. Les
-résultats seront ajoutés ici.
+Un seul échantillon JSMA pesait autant que cent échantillons FGSM. La v6
+normalisait donc la loss par groupe, chacun comptant pour 20 %, et élargissait
+le réseau à 40 de goulot avec deux couches cachées par côté.
+
+**Elle a créé le problème symétrique.** DeepFool est passé à 95.8 % du
+gradient. En reconstituant les MSE brutes depuis les pertes normalisées à
+convergence :
+
+| Groupe | MSE brute du DAE | Part de la loss v6 |
+|---|---:|---:|
+| Propre | 0.003742 | 0.8 % |
+| FGSM | 0.003914 | 1.5 % |
+| BIM | 0.003715 | 1.8 % |
+| **DeepFool** | 0.003920 | **95.8 %** |
+| JSMA | 0.021764 | 0.1 % |
+
+Les quatre premières valeurs sont identiques : **le DAE a un plancher de bruit
+propre à 0.0037, indépendant de son entrée**. Or la perturbation de DeepFool
+vaut 0.000194, soit dix-neuf fois moins. Diviser par elle rend la cible
+mathématiquement inatteignable et absorbe tout le gradient. Résultat : F1
+macro moyen de 0.1726 contre 0.3515 pour le baseline seul, aucune epoch
+n'ayant battu la référence.
+
+**Ce que cela établit.** Le plancher de bruit définit une fenêtre d'utilité
+étroite pour un autoencodeur en prétraitement : il ne peut aider que les
+attaques dont la perturbation dépasse son propre bruit sans excéder sa
+capacité de reconstruction. FGSM (0.0128) et BIM (0.0096) sont dans cette
+fenêtre, ce qui explique que la v5 y obtienne ses meilleurs gains (+0.168 et
++0.137). DeepFool est sous le plancher — le remède est alors pire que le mal.
+JSMA est très au-dessus.
+
+La v5 reste donc la version retenue : `hidden_dim` 32, loss non normalisée,
+architecture 58-45-32-45-58.
+
+**Bug identifié au passage.** Le repli « le checkpoint existant est conservé »
+de `14_defense_denoising_autoencoder.py` recharge l'ancien fichier sans
+vérifier que son architecture correspond à la classe courante. C'est ce qui a
+produit un `RuntimeError` en fin de v6, après un entraînement pourtant mené à
+terme. À corriger avant toute nouvelle tentative.
 
 ### Étape 9 — Agrégation par ensemble
 
@@ -1024,9 +1060,12 @@ quasi irrécupérables sur du trafic réseau normalisé.
 
 ## Pistes pour la suite
 
-**Élargir le DAE.** La MSE plafonne à 0.0203 alors qu'une PCA à 32
-composantes atteint 0.000004 sur la même dimension latente. La v6 en cours
-teste un goulot à 40 avec deux couches cachées par côté.
+**Le DAE a été exploré jusqu'au bout.** Six versions, chacune diagnostiquée
+par la mesure. La v6 a montré que son plancher de bruit (0.0037) limite
+intrinsèquement son utilité aux attaques d'amplitude intermédiaire. Élargir le
+réseau ne suffit pas : la v6 avait 14 790 paramètres contre 8 280 et faisait
+nettement moins bien. Une piste différente serait nécessaire, par exemple un
+autoencodeur par type d'attaque plutôt qu'un modèle unique.
 
 **Explorer sigma pour GA.** La valeur de 0.1 n'est pas documentée par
 l'article et le meilleur epoch était le 10 sur 100 sans label smoothing, ce
