@@ -41,6 +41,8 @@ results/figures/*.png
 !results/figures/final_*.png
 !results/figures/attacks_*.png
 !results/figures/cm_*.png
+!results/figures/defenses_*.png
+!results/figures/ensemble_*.png
 
 # Jupyter
 .ipynb_checkpoints/
