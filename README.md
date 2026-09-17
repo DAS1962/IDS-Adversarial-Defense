@@ -44,45 +44,65 @@ Le projet suit les 9 étapes du framework proposé par Awad et al. (2025) :
 | 8 | Mécanismes de défense | **Terminée** (7-8 sept. 2026) |
 | 9 | Agrégation par ensemble | **Terminée** (8 sept. 2026) |
 
-Le pipeline complet a été exécuté de bout en bout. Une version 6 du DAE a été tentée puis
-abandonnée (voir étape 8) ; la version retenue est la v5.
+Le pipeline complet a été exécuté de bout en bout. Les exécutions de référence de chaque défense sont figées dans
+`configs/config.yaml`, section `reference_runs`, avec leur justification.
 
 ---
 
 ## Résumé des résultats
 
-**Baseline sur données propres** : accuracy 99.79 %, F1 macro 0.8411.
+Tous les chiffres viennent de `results/figures/defenses_summary.csv`, produit
+par `scripts/17_plot_defenses.py` qui lit directement les fichiers de
+résultats. Aucun n'est recopié à la main : deux valeurs fausses s'étaient
+glissées dans une version antérieure de ce document par transcription.
+
+**Baseline sur données propres** : accuracy 99.79 %, F1 macro 0.8411,
+F1 pondéré 0.9979.
 
 **Vulnérabilité en semi-white box** : les six attaques ramènent le F1 macro
-entre 0.06 et 0.33. Les accuracies restent entre 82 et 88 %, mais c'est un
-artefact du plancher fixé par la proportion de BENIGN dans le test (83.1 %) —
-voir l'étape 7.
+entre 0.06 et 0.33. Les accuracies restent entre 82 et 88 %, artefact du
+plancher fixé par les 83.1 % de trafic bénin du test — voir l'étape 7.
 
-**Défenses individuelles**, gain moyen en F1 macro sur les six attaques et
-coût sur les données propres :
+**Tableau de référence.** Le gain est la moyenne des écarts au baseline sur
+les six attaques, le coût l'écart sur données propres, le bilan net leur
+somme. Le rappel BENIGN minimal est le minimum sur les six attaques.
 
-| Défense | Gain attaques | Coût clean | Bilan net |
-|---|---:|---:|---:|
-| **Adversarial Training (PGD) + LS** | +0.1015 | −0.0481 | **+0.053** |
-| Gaussian Augmentation + LS | +0.1027 | −0.1349 | −0.032 |
-| Label Smoothing seul | +0.0001 | −0.0052 | −0.005 |
-| Denoising Autoencoder v5 | +0.0737 | −0.3913 | −0.318 |
+| Configuration | F1 macro | F1 pondéré | MCC binaire | Rappel BENIGN min | Gain | Coût | Bilan net |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Baseline | 0.8411 | 0.9979 | 0.9936 | 0.8810 | — | — | — |
+| **Ensemble parts égales** | 0.8188 | 0.9972 | 0.9922 | 0.9644 | **+0.1189** | −0.0224 | **+0.0965** |
+| **Adversarial (PGD, 150)** | **0.8494** | 0.9972 | 0.9914 | 0.8834 | +0.0863 | **+0.0082** | +0.0945 |
+| Ensemble optimisé | 0.8264 | 0.9977 | 0.9931 | 0.9531 | +0.1081 | −0.0148 | +0.0933 |
+| Ensemble vote majoritaire | 0.8278 | 0.9943 | 0.9811 | **0.9810** | +0.0906 | −0.0133 | +0.0773 |
+| Gaussienne (sigma 0.02) | 0.6813 | 0.9696 | 0.8901 | 0.9582 | +0.1084 | −0.1598 | −0.0513 |
+| Lissage des étiquettes | 0.8359 | 0.9979 | 0.9936 | **0.6069** | +0.0001 | −0.0052 | −0.0051 |
+| Autoencodeur (v5) | 0.4498 | 0.9300 | 0.7540 | 0.9176 | +0.0737 | −0.3914 | −0.3177 |
 
-**Agrégation par ensemble** :
+**Ce que ce tableau établit.**
 
-| Méthode | Gain attaques | Coût clean | Bilan net |
-|---|---:|---:|---:|
-| **Weighted Average, poids égaux** | **+0.1103** | −0.0482 | **+0.062** |
-| Majority Voting | +0.0950 | −0.0569 | +0.038 |
-| Weighted Average optimisé | +0.0721 | −0.0019 | +0.070 |
+La proposition centrale de l'article est vérifiée, mais de justesse :
+l'ensemble à parts égales dépasse la meilleure défense individuelle de
++0.033 en gain brut. En bilan net l'écart tombe à **0.002**, indépartageable
+sans mesure de variance.
 
-**Le résultat central de l'article est reproduit** : l'ensemble à poids égaux
-dépasse la meilleure défense individuelle (+0.1103 contre +0.1015) pour un
-coût identique sur les données propres.
+**Aucune métrique ne suffit seule.** Le lissage est premier en F1 pondéré
+(0.9979, identique au baseline) et dernier en rappel BENIGN minimal (0.6069,
+soit 39 % du trafic légitime rejeté sous PGD). Une défense qui ne gagne rien
+(+0.0001) paraît parfaite sous la métrique que publie l'article.
 
-**Le résultat le plus robuste de cette étude** : JSMA résiste à tout. Cinq
-défenses, trois méthodes d'agrégation, quinze combinaisons — aucune ne
-dépasse 0.065 de F1 macro contre les 0.0605 du baseline non défendu.
+**Le MCC binaire nous place au-dessus de l'article.** Sa Table 9 donne 0.596
+à 0.698 selon la défense ; nous obtenons 0.754 à 0.994. C'est la comparaison
+la moins contestable dont nous disposions, le MCC étant robuste au
+déséquilibre — mais nos valeurs portent sur un test à 83.1 % de bénin et les
+leurs sur un test de composition non documentée.
+
+**Deux attaques résistent à tout.** Dix-huit configurations testées, rien ne
+dépasse 0.068 de F1 macro contre JSMA et 0.092 contre PGD.
+
+**Les défenses sont monomaniaques.** Chacune tire l'essentiel de son gain
+d'une seule attaque : l'adversarial 71 % de FGSM, la gaussienne 54 % de
+DeepFool. Cela contredit le récit de synergie complémentaire du papier, dont
+la Figure 7 montre au contraire des défenses uniformes sur les six attaques.
 
 ---
 
@@ -417,311 +437,231 @@ Script : `scripts/15_balanced_evaluation.py`.
 ### Étape 8 — Mécanismes de défense
 
 Quatre défenses, chacune évaluée sur les données propres et les six attaques
-du test complet. Le module partagé `src/defenses/common.py` factorise le
-chargement, l'évaluation et les métriques.
+du test complet. Le module `src/defenses/common.py` factorise le chargement,
+l'évaluation et les métriques pour que les quatre soient mesurées à
+l'identique.
 
-**Label smoothing appliqué aux quatre défenses**, comme le prescrit
-l'article. L'Algorithme 3 dit « train the IDS classifier with the adversarial
-augmented dataset and smooth train labels », l'Algorithme 4 « with the
-Gaussian augmented dataset and smooth train labels », et la section « Defense
-strategies » précise que les défenses sont améliorées « particularly when
-trained with smoothed labels ». Le lissage n'est donc pas une défense
-parallèle aux trois autres chez eux, c'est une couche appliquée en dessous.
+**Le lissage des étiquettes est appliqué aux quatre défenses**, comme le
+prescrit l'article. Son Algorithme 3 dit « train the IDS classifier with the
+adversarial augmented dataset and smooth train labels », son Algorithme 4
+« with the Gaussian augmented dataset and smooth train labels », et la section
+« Defense strategies » précise que les défenses sont améliorées
+« particularly when trained with smoothed labels ». Le lissage n'est donc pas
+une défense parallèle aux trois autres chez eux, c'est une couche appliquée
+en dessous.
 
 *Note : les Algorithmes 3 et 4 sont intervertis dans l'article — leurs titres
 ne correspondent pas à leur contenu.*
 
-#### Résultats des quatre défenses
+#### Exécutions de référence
 
-Gain moyen en F1 macro sur les six attaques, et F1 macro sur données propres :
+Plusieurs exécutions existent par défense : quatre pour l'adversarial, quatre
+pour la gaussienne, six pour l'autoencodeur. Les scripts retenaient
+initialement la plus récente, ce qui est arbitraire — `defense_ga_best.pth`
+contenait encore sigma 0.1 alors que sigma 0.02 est meilleur sur les quatre
+critères. Le choix est maintenant figé dans `configs/config.yaml`, section
+`reference_runs`, avec sa justification.
 
-| Défense | Gain attaques | F1 clean | Coût clean | Bilan net |
-|---|---:|---:|---:|---:|
-| **AT (PGD) + LS** | +0.1015 | 0.7930 | −0.0481 | **+0.053** |
-| GA + LS | +0.1027 | 0.7062 | −0.1349 | −0.032 |
-| LS seul | +0.0001 | 0.8359 | −0.0052 | −0.005 |
-| DAE v5 | +0.0737 | 0.4498 | −0.3913 | −0.318 |
+| Défense | Version retenue | Motif |
+|---|---|---|
+| Lissage | alpha 0.1 | exécution unique |
+| Adversarial | PGD en ligne, 7 pas, 150 passages | attaques d'évaluation non vues |
+| Gaussienne | sigma 0.02 | domine sur les quatre critères |
+| Autoencodeur | v5, 58-45-32-45-58 | seule des six à gain positif |
 
-**F1 macro par attaque** :
+#### Adversarial training : deux protocoles, et un problème de mesure
 
-| Attaque | Baseline | LS | GA+LS | AT+LS | DAE v5 |
-|---|---:|---:|---:|---:|---:|
-| Clean | 0.8411 | 0.8359 | 0.7062 | 0.7930 | 0.4498 |
-| FGSM | 0.1502 | 0.1854 | 0.2400 | **0.4423** | 0.3184 |
-| BIM | 0.1621 | 0.1733 | 0.1653 | 0.1520 | **0.2994** |
-| PGD | 0.0605 | 0.0492 | 0.0674 | 0.0656 | **0.1492** |
-| DeepFool | 0.3291 | 0.3138 | **0.6217** | 0.5556 | 0.4318 |
-| JSMA | 0.0605 | 0.0611 | 0.0405 | **0.0680** | 0.0626 |
-| C&W | 0.3004 | 0.2795 | **0.4813** | 0.4053 | 0.2435 |
+L'Algorithme 3 prend en entrée « Previously Generated Adversarial examples of
+four attack categories (FGSM, DEEPFOOL, BIM, JSMA) ». Les deux versions ont
+été exécutées.
 
-#### Adversarial Training : PGD et non FGSM
-
-La première version générait les exemples d'entraînement avec FGSM en un pas.
-Résultat mesuré : +0.137 de F1 macro contre FGSM, mais +0.011 contre PGD et
-+0.001 contre JSMA. La défense protégeait uniquement contre l'attaque exacte
-sur laquelle elle s'entraînait — signature du masquage de gradient décrit par
-**Madry et al. 2018**, la référence que l'article cite pour cette défense, et
-qui recommande explicitement PGD avec plusieurs pas et départ aléatoire.
-
-| Version | Gain moyen |
-|---|---:|
-| AT-FGSM | +0.0656 |
-| **AT-PGD** | **+0.0986** |
-| AT-PGD + LS | +0.1015 |
-
-Le gain vient surtout de FGSM (+0.169), DeepFool (+0.035) et C&W (+0.043).
-BIM régresse de 0.049 et PGD reste inchangé, donc le masquage de gradient
-n'était pas la seule limite.
-
-`eps=0.2` reprend la valeur FGSM de la Table 2, `alpha = 2.5*eps/steps` suit
-la règle usuelle. L'article ne documente ni epsilon ni le nombre de pas de son
-attaque d'entraînement.
-
-**Trois criterions distincts** sont nécessaires dans ce script, et les
-confondre serait un bug silencieux : lissé pour l'entraînement, **non lissé
-pour la génération PGD** (lisser modifierait la direction du gradient
-d'attaque, donc la nature des exemples), et non lissé pour l'évaluation.
-
-#### L'effet du label smoothing est conditionnel
-
-| Défense | Sans LS | Avec LS | Écart gain | Écart F1 clean |
-|---|---:|---:|---:|---:|
-| GA | +0.0789 | +0.1027 | +0.024 | **+0.125** |
-| AT | +0.0986 | +0.1015 | +0.003 | −0.004 |
-
-Le lissage aide massivement GA et pas du tout AT. L'explication est dans les
-courbes d'entraînement : GA sans LS plafonnait à `train_acc` 0.875 avec un
-meilleur epoch à **10 sur 100** — le modèle n'arrivait pas à apprendre, le
-bruit à sigma=0.1 rendant la cible trop dure. Avec LS, le meilleur epoch passe
-à **77 sur 100** et `train_acc` à 0.909. AT n'avait pas ce problème : il
-convergeait déjà à l'epoch 93.
-
-**Et LS seul ne défend pas** : +0.0001, soit rien. Combiné, il vaut +0.024 sur
-GA et +0.003 sur AT. Le lissage n'est donc pas une défense, c'est un adjuvant
-d'entraînement qui agit quand le modèle a du mal à converger.
-
-L'article annonce un bénéfice général de la combinaison ; ce que nous mesurons
-est un bénéfice **conditionnel**. C'est aussi le seul point où nos résultats
-contredisent directement une affirmation du papier, qui donne à LS sa
-meilleure accuracy individuelle (85.9 %).
-
-#### Denoising Autoencoder : six versions
-
-Le DAE est la défense qui a demandé le plus d'itérations. Chaque version a été
-diagnostiquée par la mesure, et le cheminement est documenté parce qu'il
-constitue une part du travail.
-
-| Version | F1 clean | Gain attaques | Changement |
-|---|---:|---:|---|
-| v1 | 0.2081 | −0.036 | Bruit gaussien seul, 58 → ReLU(32) → 58 |
-| v2 | 0.1577 | −0.073 | + FGSM eps=0.2 régénéré à la volée |
-| v3 | 0.1820 | −0.053 | + profondeur, goulot **linéaire** |
-| v4 | 0.8411 | 0.0000 | + résidu initialisé à l'identité, fraction propre |
-| **v5** | 0.4498 | **+0.0737** | + 4 attaques réelles, reconstruction complète |
-| v6 | 0.1726* | abandonnée | + loss normalisée par groupe, goulot élargi à 40 |
-
-*\*F1 macro moyen sur validation propre et quatre attaques du train ; aucune epoch n'a battu la référence de 0.3515, donc aucun checkpoint n'a été écrit.*
-
-**v1 et v2 : mauvaise source de corruption.** Le DAE était entraîné sur du
-bruit gaussien ou un FGSM approximatif régénéré à la volée. Or l'Algorithme 5
-prescrit « Aggregated Adversarial examples of four attack categories (FGSM,
-DEEPFOOL, BIM, JSMA) » et « Construct total samples by concatenating (adv
-examples, real samples) ». Le bruit gaussien était une invention de notre
-part.
-
-**v3 : le ReLU du goulot détruisait la moitié de l'espace latent.** La mesure
-sur le modèle entraîné montre **51.5 % d'activations latentes négatives** et
-0 % annulées avec un goulot linéaire — donc avec le ReLU des v1/v2, la moitié
-du latent était mise à zéro. Correction réelle mais insuffisante.
-
-**v4 : le réseau n'avait jamais vu d'entrée propre.** Diagnostic décisif, en
-passant des données non corrompues dans le DAE v3 :
-
-| Mesure | Valeur |
-|---|---:|
-| MSE(x, DAE(x)) sur données propres | 0.007189 |
-| soit, en part de la variance des données | **31.5 %** |
-| Écart-type moyen : entrée → sortie | 0.0988 → 0.0747 |
-| Features perdant plus de la moitié de leur écart-type | **29 / 58** |
-| F1 macro : sans DAE → avec DAE | 0.8527 → 0.2109 |
-
-`corrompre_batch` corrompait 100 % du batch dans les trois versions. Le réseau
-avait donc appris « retire une corruption d'amplitude donnée » et l'appliquait
-indistinctement, y compris là où il n'y avait rien à retirer. Aucune
-modification d'architecture ne pouvait corriger cela, ce qui explique l'échec
-identique des trois premières versions.
-
-La v4 a réglé ce point (MSE(x, DAE(x)) = 0.000001, rapport d'écarts-types
-1.000) mais **convergeait vers l'identité** : aucune epoch n'a dépassé la
-référence du baseline seul, et le mécanisme de repli a retenu l'identité.
-
-**v5 : les quatre attaques réelles et la reconstruction complète.** Un
-nouveau script `08b_generate_train_attacks.py` génère les quatre attaques de
-l'Algorithme 5 sur un sous-échantillon stratifié de 400 000 lignes du train —
-les `X_adv` de l'étape 6 couvrent le test et ne peuvent pas servir sans fuite.
-Amplitudes mesurées :
-
-| Attaque | L∞ moyen | L2 moyen | Features touchées |
-|---|---:|---:|---:|
-| FGSM | 0.1020 | 0.6113 | 24.6 / 58 |
-| BIM | 0.0765 | 0.3816 | 23.5 / 58 |
-| DeepFool | 0.0261 | 0.0463 | 50.3 / 58 |
-| **JSMA** | **0.9534** | **6.6445** | 53.3 / 58 |
-
-JSMA a un L2 vingt fois supérieur à ce que les versions précédentes
-apprenaient à retirer. La connexion résiduelle a aussi été supprimée : elle
-court-circuitait la projection sur la variété apprise, qui est le mécanisme
-même de purification.
-
-Résultat : la défense fonctionne enfin. **+0.0737** de gain, cinq attaques sur
-six progressent, et **PGD gagne +0.089 alors qu'il n'est pas dans
-l'entraînement** — la purification transfère à une attaque jamais vue. C&W,
-l'autre attaque absente, régresse de 0.057.
-
-Mais le coût sur les données propres est de −0.39 : le DAE détruit encore de
-l'information sur des entrées saines.
-
-**v6, tentée et abandonnée.** Le diagnostic de la v5 montrait que la MSE
-brute était dominée par JSMA. Amplitudes converties en MSE par feature :
-
-| Groupe | MSE de corruption | Part de la loss v5 | Gain en F1 macro (v5) |
-|---|---:|---:|---:|
-| **JSMA** | 0.761196 | **98.8 %** | **+0.002** |
-| FGSM | 0.006443 | 0.8 % | +0.168 |
-| BIM | 0.002511 | 0.3 % | +0.137 |
-| DeepFool | 0.000037 | 0.0 % | +0.103 |
-
-Un seul échantillon JSMA pesait autant que cent échantillons FGSM. La v6
-normalisait donc la loss par groupe, chacun comptant pour 20 %, et élargissait
-le réseau à 40 de goulot avec deux couches cachées par côté.
-
-**Elle a créé le problème symétrique.** DeepFool est passé à 95.8 % du
-gradient. En reconstituant les MSE brutes depuis les pertes normalisées à
-convergence :
-
-| Groupe | MSE brute du DAE | Part de la loss v6 |
+| | PGD en ligne | Quatre attaques (Algo 3) |
 |---|---:|---:|
-| Propre | 0.003742 | 0.8 % |
-| FGSM | 0.003914 | 1.5 % |
-| BIM | 0.003715 | 1.8 % |
-| **DeepFool** | 0.003920 | **95.8 %** |
-| JSMA | 0.021764 | 0.1 % |
+| Gain moyen | +0.0863 | **+0.3869** |
+| F1 macro propre | **0.8494** | 0.8191 |
+| Coût propre | **+0.0082** | −0.0220 |
+| Rappel BENIGN min | **0.8834** | 0.5748 |
+| F1 sous BIM | 0.1642 | **0.9651** |
 
-Les quatre premières valeurs sont identiques : **le DAE a un plancher de bruit
-propre à 0.0037, indépendant de son entrée**. Or la perturbation de DeepFool
-vaut 0.000194, soit dix-neuf fois moins. Diviser par elle rend la cible
-mathématiquement inatteignable et absorbe tout le gradient. Résultat : F1
-macro moyen de 0.1726 contre 0.3515 pour le baseline seul, aucune epoch
-n'ayant battu la référence.
+**La version conforme obtient quatre fois plus, et c'est un artefact.** Ses
+exemples d'entraînement (`08b`, sur le train) et d'évaluation (`08`, sur le
+test) viennent du même substitut avec les mêmes paramètres : les lignes
+diffèrent, la distribution des perturbations non. Le modèle a donc vu la forme
+exacte de FGSM, BIM, DeepFool et JSMA.
 
-**Ce que cela établit.** Le plancher de bruit définit une fenêtre d'utilité
-étroite pour un autoencodeur en prétraitement : il ne peut aider que les
-attaques dont la perturbation dépasse son propre bruit sans excéder sa
-capacité de reconstruction. FGSM (0.0128) et BIM (0.0096) sont dans cette
-fenêtre, ce qui explique que la v5 y obtienne ses meilleurs gains (+0.168 et
-+0.137). DeepFool est sous le plancher — le remède est alors pire que le mal.
-JSMA est très au-dessus.
+Le signe est net : sous BIM elle atteint **0.9651, soit mieux que son F1 macro
+sur données propres (0.8191)**. Un modèle qui classe mieux des données
+attaquées que des données saines n'est pas robuste, il a mémorisé la forme de
+l'attaque. Son rappel BENIGN tombe par ailleurs à 0.5748 sous C&W : elle
+rejette 42 % du trafic légitime, ce que le gain moyen masque entièrement.
 
-La v5 reste donc la version retenue : `hidden_dim` 32, loss non normalisée,
-architecture 58-45-32-45-58.
+La version PGD en ligne s'entraîne contre des perturbations générées sur
+elle-même, tandis que les six attaques d'évaluation viennent du substitut. Son
++0.0863 est donc intégralement mesuré sur des perturbations non vues. Elle est
+retenue pour cette raison, et c'est aussi la seule configuration du projet à
+**améliorer** le F1 macro sur données propres.
 
-**Bug identifié au passage.** Le repli « le checkpoint existant est conservé »
-de `14_defense_denoising_autoencoder.py` recharge l'ancien fichier sans
-vérifier que son architecture correspond à la classe courante. C'est ce qui a
-produit un `RuntimeError` en fin de v6, après un entraînement pourtant mené à
-terme. À corriger avant toute nouvelle tentative.
+**À retenir malgré son écartement.** La version conforme porte PGD de 0.0605 à
+**0.3121** et JSMA de 0.0605 à **0.1092**, sur deux attaques absentes de son
+entraînement. Ce sont les seuls progrès réels du projet sur les deux attaques
+que rien n'arrête.
+
+L'article a la même structure de protocole. Si ses exemples d'entraînement et
+d'évaluation partagent aussi leur distribution, ses chiffres pour ces quatre
+attaques sont surestimés par construction — ce qui expliquerait la bande
+étroite de 77.4 à 83.85 % de sa Table 6.
+
+Le paramètre `defenses.AdversarialTraining.source` bascule entre les deux
+protocoles : `precomputed` suit l'Algorithme 3, `online` génère à la volée.
+
+Point d'implémentation : **trois fonctions de coût distinctes** sont
+nécessaires dans ce script, et les confondre serait un bug silencieux — lissée
+pour l'entraînement, **non lissée pour générer l'attaque** (lisser modifierait
+la direction du gradient, donc la nature des exemples produits), non lissée
+pour l'évaluation.
+
+#### Augmentation gaussienne : balayage de sigma
+
+L'article ne documente pas sigma. Trois valeurs ont été testées.
+
+| sigma | Gain | F1 macro propre | Rappel BENIGN min | Bilan net |
+|---:|---:|---:|---:|---:|
+| **0.02** | **+0.1084** | **0.6813** | **0.9582** | **−0.0513** |
+| 0.05 | +0.0948 | 0.6459 | 0.0119 | −0.1005 |
+| 0.1 | +0.0844 | 0.5998 | 0.0184 | −0.1569 |
+
+Sigma 0.02 domine sur les quatre critères. Et le rappel BENIGN minimal révèle
+ce que les autres métriques ne montrent pas : **à 0.05 et 0.1, le modèle
+rejette plus de 98 % du trafic légitime sous JSMA**. Il est alors inutilisable
+en pratique, quel que soit son gain moyen.
+
+Une observation qui tempère le mérite de cette défense : sous DeepFool, son F1
+macro (0.6769) est **identique à son F1 sur données propres** (0.6813). La
+perturbation de DeepFool a une MSE de 0.000194, inférieure à la variance du
+bruit d'entraînement (0.0004 à sigma 0.02). L'attaque est donc simplement
+invisible pour ce modèle — ce n'est pas de la défense, c'est un non-événement.
+Or DeepFool fournit 54 % du gain de cette configuration.
+
+Le plafonnement de l'apprentissage n'est pas dû au bruit : le meilleur passage
+reste au 18ᵉ sur 100 à sigma 0.02, au 19ᵉ à sigma 0.1. La cause reste
+inexpliquée.
+
+#### Denoising autoencoder : six versions
+
+C'est la partie qui a demandé le plus d'itérations. Chaque échec a été
+diagnostiqué par la mesure.
+
+| Version | F1 propre | Gain | Changement |
+|---|---:|---:|---|
+| v1 | 0.2081 | −0.036 | bruit gaussien seul |
+| v2 | 0.1577 | −0.073 | + FGSM régénéré à la volée |
+| v3 | 0.1820 | −0.053 | goulot rendu **linéaire** |
+| v4 | 0.8411 | 0.0000 | + résidu et fraction propre |
+| **v5** | 0.4498 | **+0.0737** | + 4 attaques réelles, reconstruction complète |
+| v6 | 0.1726* | abandonnée | loss normalisée par groupe |
+
+*\*F1 macro moyen sur validation propre et quatre attaques du train.*
+
+**v3** : le ReLU du goulot annulait toute coordonnée négative. Mesure : 51.5 %
+des activations latentes sont négatives, donc la moitié de l'espace était
+détruite.
+
+**v4** : diagnostic décisif. En passant des données saines dans le v3,
+MSE(x, DAE(x)) = 0.00719, soit **31.5 % de la variance**, et 29 features sur
+58 perdant plus de la moitié de leur écart-type. Le batch était corrompu à
+100 %, donc le réseau n'avait jamais appris à laisser passer une entrée
+propre. Corrigé, il converge alors vers l'identité : gain exactement nul.
+
+**v5** : les quatre attaques réelles de `08b` et la reconstruction complète
+sans résidu, qui court-circuitait la projection sur la variété apprise.
+Premier gain positif. PGD y gagne +0.089 alors qu'il n'est pas dans
+l'entraînement, ce qui montre un transfert réel ; C&W régresse de 0.057.
+
+**v6, abandonnée.** La MSE brute était dominée par JSMA à 98.8 % du gradient
+pour un gain de +0.002. La loss normalisée par groupe a créé le problème
+symétrique : DeepFool est passé à 95.8 %. En reconstituant les MSE brutes, les
+groupes propre, FGSM, BIM et DeepFool donnent tous 0.0037 — **le DAE a un
+plancher de bruit propre, indépendant de son entrée**. La perturbation de
+DeepFool (0.000194) est dix-neuf fois inférieure, rendant la cible normalisée
+inatteignable.
+
+Ce plancher définit une **fenêtre d'utilité étroite** : le DAE ne peut aider
+que les attaques dont la perturbation dépasse son propre bruit sans excéder sa
+capacité. FGSM (0.0128) et BIM (0.0096) y sont, DeepFool est dessous, JSMA
+(0.806) très au-dessus.
+
+**Réserve** : la v5 est entraînée sur les mêmes quatre attaques que l'AT
+écarté plus haut, donc son gain sur FGSM, BIM, DeepFool et JSMA est
+probablement surestimé pour la même raison. L'Algorithme 5 prescrit
+explicitement ces quatre attaques, sans alternative.
 
 ### Étape 9 — Agrégation par ensemble
 
 Les quatre défenses produisent leurs probabilités softmax sur les données
-propres et chaque attaque. Trois méthodes d'agrégation sont comparées.
+propres et chaque attaque. Trois méthodes sont comparées.
 
-| Méthode | Gain attaques | F1 clean | Coût clean | Bilan net |
+| Méthode | Gain | F1 macro propre | Rappel BENIGN min | Bilan net |
 |---|---:|---:|---:|---:|
-| **Weighted Average, poids égaux** | **+0.1103** | 0.7929 | −0.0482 | **+0.062** |
-| Majority Voting | +0.0950 | 0.7842 | −0.0569 | +0.038 |
-| Weighted Average optimisé | +0.0721 | 0.8392 | −0.0019 | +0.070 |
+| **Parts égales** | **+0.1189** | 0.8188 | 0.9644 | **+0.0965** |
+| Optimisé (Nelder-Mead) | +0.1081 | 0.8264 | 0.9531 | +0.0933 |
+| Vote majoritaire | +0.0906 | 0.8278 | **0.9810** | +0.0773 |
 
-**F1 macro par attaque et par méthode** :
+**La proposition de l'article est vérifiée, de justesse.** La moyenne à parts
+égales atteint +0.1189 contre +0.0863 pour la meilleure défense individuelle.
+En bilan net l'écart tombe à 0.002 — indépartageable sans mesure de variance.
 
-| Attaque | Baseline | Majority | WA égal | WA optimisé |
-|---|---:|---:|---:|---:|
-| Clean | 0.8411 | 0.7842 | 0.7929 | **0.8392** |
-| FGSM | 0.1502 | 0.3258 | **0.3517** | 0.2306 |
-| BIM | 0.1621 | 0.1878 | **0.1994** | 0.1534 |
-| PGD | 0.0605 | 0.0757 | **0.0922** | 0.0629 |
-| DeepFool | 0.3291 | 0.4566 | 0.5293 | **0.5454** |
-| JSMA | 0.0605 | **0.0643** | 0.0631 | 0.0632 |
-| C&W | 0.3004 | **0.5228** | 0.4889 | 0.4400 |
+Correspondance avec l'article : son « soft voting », qui donne son meilleur
+résultat (87.49 %), est la moyenne des probabilités, donc notre méthode à
+parts égales. Cohérent avec nous, où c'est aussi le meilleur gain.
 
-**Accuracies correspondantes** :
+**Ce que l'ensemble apporte réellement ici.** Ce n'est pas la performance,
+puisque l'adversarial seul est à 0.002 de lui. C'est la **protection contre
+l'effondrement d'un membre** : le rappel BENIGN minimal passe de 0.6069 pour
+le lissage seul à 0.9810 pour le vote majoritaire. Un membre qui rejette 39 %
+du trafic légitime est corrigé par les trois autres.
 
-| Attaque | Baseline | Majority | WA égal | WA optimisé |
-|---|---:|---:|---:|---:|
-| Clean | 99.79 % | 98.95 % | 99.38 % | 99.77 % |
-| FGSM | 86.75 % | 90.07 % | 90.22 % | 85.99 % |
-| BIM | 87.42 % | 87.62 % | 88.38 % | 86.82 % |
-| PGD | 82.10 % | 83.05 % | 83.60 % | 81.16 % |
-| DeepFool | 86.92 % | 90.65 % | 93.35 % | 90.37 % |
-| JSMA | 83.05 % | 83.12 % | 83.11 % | 83.11 % |
-| C&W | 84.14 % | 93.54 % | 93.94 % | 90.66 % |
+C'est une conclusion différente de celle du papier — l'ensemble assure contre
+les défaillances plutôt qu'il n'améliore la détection — mais elle est mesurée.
 
-**Le résultat central de l'article est reproduit.** Le Weighted Average à
-poids égaux atteint +0.1103, contre +0.1015 pour la meilleure défense
-individuelle (AT+LS), pour un coût identique sur les données propres. L'union
-fait mieux que chacun de ses membres.
+#### Sur les poids optimisés
 
-#### Pourquoi la version optimisée fait moins bien
+Nelder-Mead retient lissage 0.290, gaussienne 0.263, adversarial 0.255,
+autoencodeur 0.193. La gaussienne reçoit donc **plus de poids que
+l'adversarial** alors que son F1 macro propre est de 0.6813 contre 0.8494.
 
-Nelder-Mead retient : **LS 0.364, AT 0.309, GA 0.288, DAE 0.039**. Il écarte
-presque complètement le DAE.
-
-C'est rationnel mais contre-productif ici, et cela découle d'un choix
-méthodologique assumé : **les poids sont optimisés sur la validation propre,
-pas sur les attaques du test**. L'article optimise pour maximiser la
-performance sous attaque, mais le faire sur le test reviendrait à ajuster un
-hyperparamètre sur le jeu d'évaluation — exactement le biais retiré de
-l'étape 5. Or le DAE v5 est de loin le plus faible sur données propres
-(F1 0.45 contre 0.79 pour AT), donc l'optimisation le pénalise alors que c'est
-sous attaque qu'il apporte quelque chose.
-
-Conséquence : la méthode optimisée préserve remarquablement les données
-propres (F1 macro 0.8392, presque le baseline) mais perd le bénéfice du DAE.
-Elle régresse même sur FGSM et BIM par rapport aux poids égaux.
+C'est la conséquence d'un choix assumé : **les poids sont optimisés sur la
+validation propre, pas sur les attaques du test**. L'article optimise pour la
+performance sous attaque, mais le faire sur le jeu d'évaluation reviendrait à
+y ajuster un hyperparamètre — exactement le biais retiré de l'étape 5.
 
 **La fonction objectif est le F1 macro et non l'accuracy.** Optimiser
-l'accuracy récompenserait un ensemble qui classe tout BENIGN, puisqu'elle est
+l'accuracy récompenserait un ensemble classant tout en BENIGN, puisqu'elle est
 plafonnée à 83.1 %.
 
 **Déviation technique** : l'article utilise scikit-optimize (optimisation
 bayésienne), nous utilisons Nelder-Mead de scipy — équivalent sur un problème
 à 4 dimensions, sans dépendance externe à installer sur les clusters.
 
-#### JSMA résiste à tout
+#### JSMA et PGD résistent à tout
 
-C'est le résultat le plus robuste de cette étude.
+| Configuration | JSMA | PGD |
+|---|---:|---:|
+| Baseline | 0.0605 | 0.0605 |
+| Lissage | 0.0618 | 0.0491 |
+| Adversarial | 0.0628 | 0.0885 |
+| Gaussienne | 0.0651 | 0.0636 |
+| Autoencodeur | 0.0626 | **0.1492** |
+| Ensemble vote | 0.0627 | 0.0630 |
+| Ensemble parts égales | 0.0626 | 0.0733 |
+| Ensemble optimisé | 0.0624 | 0.0625 |
 
-| Configuration | F1 macro sous JSMA |
-|---|---:|
-| Baseline non défendu | 0.0605 |
-| Label Smoothing | 0.0611 |
-| Gaussian Augmentation + LS | 0.0405 |
-| Adversarial Training + LS | 0.0680 |
-| DAE v5 | 0.0626 |
-| Ensemble Majority Voting | 0.0643 |
-| Ensemble WA égal | 0.0631 |
-| Ensemble WA optimisé | 0.0632 |
+**Rien ne dépasse 0.068 contre JSMA.** Sa perturbation a une MSE de 0.806, soit
+trente-cinq fois la variance des données : l'information discriminante est
+détruite avant que la moindre défense n'intervienne.
 
-Cinq défenses, trois agrégations, quinze combinaisons : **rien ne dépasse
-0.068**. Avec un L2 mesuré de 6.64 sur le train — soit une MSE par feature de
-0.76, trente-trois fois la variance des données — la perturbation détruit
-l'information avant qu'aucune défense n'intervienne. Le recall reste à 0.0000
-sur les quatorze classes d'attaque et le recall BENIGN à 0.9993 : évasion
-totale, systématiquement.
-
-PGD suit le même schéma, avec un plafond à 0.0922.
-
----
+Une seule exception, hors référence : l'adversarial entraîné sur les quatre
+attaques atteint 0.1092 sous JSMA et 0.3121 sous PGD. JSMA figure dans son
+entraînement, PGD non — ce dernier gain est donc réel.
 
 ## Correctifs méthodologiques du 3 septembre 2026
 
@@ -965,121 +905,249 @@ DAE, ainsi que la taille du sous-échantillon de `08b` (400 000).
 
 ---
 
-## Résultats de référence (papier Awad et al., CIC-IDS 2017)
+## Comparaison avec l'article
 
-Deux tableaux distincts, à ne pas confondre — cette confusion a causé
-l'erreur documentée au point 8 des correctifs.
+### L'écart principal : la sélection de features est inversée
 
-**Table 5 — Accuracy du détecteur DNN sous attaque, sans défense** :
+C'est le point le plus structurant, et il est en amont de tout le reste.
+
+L'article écrit, section *Preprocessing* : « To ensure that the functionality
+of the network communication channel is preserved […] **the non-functional
+features that do not matter the most are selected** for training and testing
+purposes. In this context, we use the Extremely Randomized Trees (ERTs)
+classifier **to select the most important (functional) features and exclude
+them**. » La légende de sa Figure 3 confirme : *« The functional features to be
+removed from the dataset. »*
+
+**Ils gardent les 58 features les moins importantes et suppriment les 20 plus
+importantes.** Leur Figure 3 liste les supprimées : `packet_length_variance`,
+`max_packet_length`, `packet_length_mean`, `avg_bwd_segment_size`,
+`bwd_packet_length_max`, `packet_length_std`, `average_packet_size`,
+`destination_port`…
+
+Notre top-10 conservé : Packet Length Variance (0.0618), Packet Length Std
+(0.0598), Avg Bwd Segment Size (0.0565), Max Packet Length (0.0491), Bwd
+Packet Length Max (0.0422), Average Packet Size (0.0397)…
+
+**Nous avons gardé exactement ce qu'ils ont jeté.**
+
+Leur logique : une attaque adversariale doit préserver la fonctionnalité du
+trafic. On ne peut pas modifier arbitrairement la taille des paquets sans
+casser la communication. L'IDS est donc entraîné uniquement sur des features
+qu'un attaquant peut manipuler sans casser son attaque. C'est leur
+contribution revendiquée : « Fulfil the constraint of Preserving the
+functionality of traffic features during the adversarial generation by
+Leveraging Extremely Randomized Trees for robust non-functional feature
+selection. »
+
+**Conséquences.** Notre baseline à 99.79 % contre leur 98.11 % s'explique en
+partie par là : nous disposons des features discriminantes, eux non. Et
+surtout, nos attaques et les leurs ne portent pas sur le même espace de
+features, ce qui limite fortement la comparabilité des chiffres sous attaque.
+
+Cet écart n'est pas corrigé sur cette branche. Il fait l'objet d'une
+reproduction séparée.
+
+### La métrique de l'article n'est pas le F1 macro
+
+Sa Table 4 donne accuracy 98.11, recall 98.11, precision 98.11, F1 98.068.
+Quatre valeurs quasi identiques : signature d'une moyenne pondérée ou micro,
+pas macro. Le chiffre comparable au leur est donc **notre F1 pondéré de
+0.9979**, pas notre F1 macro de 0.8411.
+
+Notre analyse sur le F1 macro reste valide et utile, mais c'est un ajout de
+notre part, pas une reproduction.
+
+### La composition du jeu de test
+
+L'article écrit : « From the training dataset, we randomly select 40,000
+samples (10,000 for each attack) of which 20,000 represent regular traffic and
+the remaining represent intrusions. From the testing data set we select 20,000
+samples (5000 for each attack). »
+
+Le 50/50 est explicite pour l'entraînement. **Pour le test, la proportion de
+bénin n'est pas donnée.** Ces chiffres confirment en revanche que le protocole
+porte sur **quatre attaques** (10 000 × 4 = 40 000), alors que la Table 5 en
+évalue six.
+
+Notre analyse du plancher (étape 7) reste donc valide : sans connaître leur
+proportion de bénin, les accuracies ne sont pas comparables.
+
+### Tableau de correspondance
+
+| Élément | Article | Nous | Verdict |
+|---|---|---|---|
+| Dataset | CIC-IDS 2017 | idem | conforme |
+| **Sélection de features** | **ERT, 58 moins importantes** | **RF, 58 plus importantes** | **inversé** |
+| Équilibrage | sous-échantillonnage 50 %, avant split | SMOTE plafonné, après split | opposé |
+| Doublons | non mentionné | 307 078 retirés | ajout |
+| Baseline | 512-256-15, lr 0.01, 30 passages | idem, lr 0.001, 100 passages | ajusté |
+| Substitut | 58-100-100-15, F1 0.98 | idem, F1 0.9826 | conforme |
+| Attaques (Table 2) | 6 évaluées, 4 en défense | 6 évaluées, 4 en défense | conforme |
+| Test adversarial | 20 000, composition inconnue | 831 864, 83.1 % bénin | divergent |
+| Lissage sur les 4 défenses | oui | oui | conforme |
+| DAE sur adv + réels | oui | oui (v5) | conforme |
+| AT sur 4 attaques | oui | non (PGD en ligne) | écart assumé |
+| Métrique publiée | pondérée ou micro | macro + pondérée + MCC | ajout |
+| Optimisation des poids | non précisée | validation propre | plus strict |
+| Black box | annoncé | non fait | non étayé chez eux |
+
+### Résultats de référence de l'article
+
+**Table 5 — accuracy du détecteur sous attaque, sans défense :**
 
 | Attaque | Accuracy |
 |---|---:|
-| Aucune (clean) | 98.11 % |
-| FGSM | 54.50 % |
-| BIM | 45.00 % |
-| PGD | 46.00 % |
-| DeepFool | 53.00 % |
+| Aucune | 98.11 % |
 | JSMA | 81.00 % |
+| FGSM | 54.50 % |
+| DeepFool | 53.00 % |
+| PGD | 46.00 % |
+| BIM | 45.00 % |
 | C&W | 36.00 % |
 
-**Table 7 — Performance des défenses et de l'ensemble** :
+**Table 7 — performance des défenses :**
 
 | Configuration | Accuracy |
 |---|---:|
-| Label Smoothing (seul) | 85.90 % |
-| Denoising Autoencoder (seul) | 84.80 % |
-| Adversarial Training (seul) | 80.25 % |
-| Gaussian Augmentation (seul) | 79.80 % |
-| Ensemble simple (Majority Voting) | 84.35 % |
-| **Ensemble optimisé (Majority Voting)** | **87.49 %** |
+| Label Smoothing | 85.90 % |
+| Denoising Autoencoder | 84.80 % |
+| Ensemble (majority voting) | 84.35 % |
+| Adversarial Training | 80.25 % |
+| Gaussian Augmentation | 79.80 % |
+| **Ensemble optimisé (soft voting)** | **87.49 %** |
 
-## Comparaison avec nos résultats
+**Table 9 — MCC binaire :** LS 0.698, DAE 0.680, AT 0.608, GA 0.596.
+Nous obtenons 0.994, 0.754, 0.991 et 0.890 respectivement.
 
-### Sur données propres
+### Désaccords de classement
 
-| Métrique | Nous | Papier | Écart |
-|---|---:|---:|---:|
-| **Accuracy** | **99.79 %** | 98.11 % | +1.68 |
-| F1 macro | 84.11 % | Non détaillé | — |
-
-### Sous attaque
-
-Les accuracies ne sont pas directement comparables : notre test contient
-83.1 % de BENIGN contre ~50 % pour l'article, ce qui fixe deux planchers
-différents. Sur un test rééquilibré à 50/50, l'écart absolu moyen passe de
-32.5 à 19.3 points, et PGD tombe à 3.4 points du chiffre du papier (étape 7).
-
-### Défenses
-
-Le classement diffère de celui de l'article :
-
-| Défense | Notre rang (F1 macro) | Rang du papier (accuracy) |
+| Défense | Notre rang (bilan net) | Rang de l'article (accuracy) |
 |---|---|---|
-| Adversarial Training | **1er** (+0.1015) | 3e (80.25 %) |
-| Gaussian Augmentation | 2e (+0.1027 brut, mais −0.13 sur clean) | 4e (79.80 %) |
-| Denoising Autoencoder | 3e (+0.0737, −0.39 sur clean) | 2e (84.80 %) |
-| Label Smoothing | 4e (+0.0001) | **1er** (85.90 %) |
+| Adversarial | **1ᵉʳ** (+0.0945) | 4ᵉ (80.25 %) |
+| Lissage | 3ᵉ (−0.0051) | **1ᵉʳ** (85.90 %) |
+| Gaussienne | 4ᵉ (−0.0513) | 5ᵉ (79.80 %) |
+| Autoencodeur | 5ᵉ (−0.3177) | 2ᵉ (84.80 %) |
 
-Le désaccord le plus net porte sur Label Smoothing, que l'article place
-premier et qui ne défend pas du tout dans nos mesures — tout en améliorant
-significativement GA lorsqu'il lui est combiné.
+Le désaccord le plus net porte sur le lissage, que l'article place premier et
+qui ne défend pas du tout dans nos mesures (+0.0001), tout en rejetant 39 % du
+trafic légitime sous PGD.
 
-### Ensemble
+### Incohérences relevées dans l'article
 
-La structure du résultat de l'article est reproduite : **l'ensemble dépasse
-chaque défense prise séparément**. Le Weighted Average à poids égaux atteint
-+0.1103 de gain moyen en F1 macro contre +0.1015 pour AT+LS.
+Elles relativisent la fiabilité de ses chiffres et sont listées ici par souci
+de complétude.
 
----
+**Formule de précision erronée**, Eq. (7) : `Precision = TP/(TP+TN)`. Le
+dénominateur correct est `TP+FP` ; la formule donnée est celle d'aucune
+métrique standard.
+
+**Trois valeurs qui ne concordent pas entre elles.** L'abstract annonce
+87.34 % en majority voting, la Table 8 donne 87.49 %, la discussion 84.34 %.
+La Table 4 donne 98.11 % et la Figure 5 98.105 %. Le texte cite « MCC values
+of 0.608 and 0.640 » pour le DAE quand sa Table 9 affiche 0.680.
+
+**Algorithmes 3 et 4 intervertis** : leurs titres ne correspondent pas à leur
+contenu.
+
+**Quatre attaques ou six ?** Les Algorithmes 2 à 5 en utilisent quatre, la
+Table 5 en évalue six, la Table 10 n'en liste que quatre.
+
+**MCC calculé en binaire** — « we reduce the classification task into binary
+classification for simplicity » — alors que tout le reste est multiclasse.
+
+**Black box annoncé, jamais rapporté** : « All the defense mechanisms are
+evaluated in semi-white box and black box settings », mais aucun résultat ne
+distingue les deux scénarios.
+
+**Matériel** : Google Colab sur un i7 à 2.70 GHz avec 8 Go de RAM, ce qui
+explique les sous-échantillons de 20 000 et 40 000 lignes sur un jeu de
+2.8 millions.
 
 ## Limites connues
 
-**Le plancher d'accuracy** rend la comparaison directe avec l'article
-impossible sur cette métrique. Toutes nos conclusions reposent sur le F1
-macro.
+**Une seule exécution par configuration, donc aucune variance mesurée.** C'est
+la limite principale. Les écarts sur lesquels reposent plusieurs conclusions
+sont du même ordre que ce qu'une graine différente pourrait produire :
+0.002 entre l'ensemble à parts égales et l'adversarial seul en bilan net,
+0.007 entre l'adversarial avec et sans lissage. **Ces comparaisons-là ne sont
+pas départageables en l'état.** Trois à cinq graines par configuration, soit
+environ six heures de GPU, transformeraient « semble meilleur » en « est
+meilleur ».
 
-**Les poids de l'ensemble sont optimisés sur la validation propre** et non
-sous attaque, pour ne pas ajuster un hyperparamètre sur le jeu d'évaluation.
-C'est plus rigoureux que le protocole de l'article mais donne un ensemble
-optimisé moins performant sous attaque.
+**Aucun attaquant adaptatif.** Les six jeux d'exemples adversariaux ont été
+générés une fois, sur un substitut entraîné à imiter le baseline. Un attaquant
+réel face à un IDS défendu entraînerait son substitut contre **le modèle
+défendu**. Nos gains sont donc des bornes supérieures optimistes — critique
+standard en robustesse adversariale (Carlini et al., *On Evaluating
+Adversarial Robustness*, 2019). L'article a la même limite.
 
-**Le DAE est entraîné sur 400 000 lignes** du train et non sur les 1 819 198,
-pour un coût de génération de 45 minutes au lieu d'environ 3 h 25. Le
-sous-échantillon est stratifié et couvre les quinze classes.
+**Le trafic bénin est perturbé lui aussi.** Les `X_adv` contiennent les
+831 864 lignes du test, dont les 691 369 BENIGN. Or un attaquant perturbe son
+propre trafic d'attaque, pas le trafic légitime de la victime qu'il ne
+contrôle pas. C'est ce qui produit l'effondrement de la gaussienne à
+sigma 0.05 et 0.1, un scénario qui ne peut pas se produire en pratique. Une
+réévaluation ne perturbant que les 140 495 lignes d'attaque ne demanderait
+aucun calcul GPU.
+
+**Sélection du modèle sur `val_acc` alors que le F1 macro est notre métrique.**
+Incohérence interne relevée tardivement. Le cas de l'adversarial à 150
+passages l'illustre : `val_acc` 0.9973 contre 0.9979 pour le baseline — plus
+basse — alors que son F1 macro test est plus haut. La sélection travaille
+contre l'objectif.
+
+**Le gain moyen masque que chaque défense est monomaniaque.** L'adversarial
+tire 71 % de son gain de FGSM, la gaussienne 54 % de DeepFool. Une moyenne sur
+six valeurs dont quatre sont nulles n'est pas une mesure de robustesse.
 
 **Trois classes n'ont aucune signification statistique** dans le test :
-Heartbleed (4 échantillons), SQL Injection (7), Infiltration (12). Aucun
-chiffre les concernant n'est interprétable, même sur le test complet.
+Heartbleed (4 échantillons), SQL Injection (7), Infiltration (12).
+
+**Huit hyperparamètres sont nos choix** et non ceux de l'article : mise à
+l'échelle, rééquilibrage, pas d'apprentissage, sigma, type d'attaque pour
+l'adversarial, taille interne de l'autoencodeur, pondération de sa fonction de
+coût, composition du test.
+
+**L'autoencodeur n'a vu que 400 000 lignes** du train sur 1 819 198, pour un
+coût de génération de 45 minutes au lieu d'environ 3 h 25.
 
 **Les epsilon de la Table 2 sont élevés** relativement à l'échelle des
 données : `eps=0.3` vaut 2.9 fois l'écart-type moyen des features (0.103). Ces
-valeurs ont du sens pour des images mais rendent PGD et JSMA
-quasi irrécupérables sur du trafic réseau normalisé.
+valeurs ont du sens pour des images, moins pour du trafic réseau normalisé, et
+c'est une piste d'explication au fait que PGD et JSMA soient irrécupérables.
 
 ---
 
 ## Pistes pour la suite
 
-**Le DAE a été exploré jusqu'au bout.** Six versions, chacune diagnostiquée
-par la mesure. La v6 a montré que son plancher de bruit (0.0037) limite
-intrinsèquement son utilité aux attaques d'amplitude intermédiaire. Élargir le
-réseau ne suffit pas : la v6 avait 14 790 paramètres contre 8 280 et faisait
-nettement moins bien. Une piste différente serait nécessaire, par exemple un
-autoencodeur par type d'attaque plutôt qu'un modèle unique.
+**Reproduction fidèle du protocole de l'article.** La sélection de features
+inversée est l'écart le plus structurant et n'est pas corrigée ici. Une
+reproduction séparée reprendrait : features non fonctionnelles sélectionnées
+par ERT, sous-échantillonnage à 50 % par classe avant découpage, test de
+20 000 échantillons, quatre attaques, F1 pondéré comme métrique. Environ huit
+heures de GPU pour tout le pipeline.
 
-**Explorer sigma pour GA.** La valeur de 0.1 n'est pas documentée par
-l'article et le meilleur epoch était le 10 sur 100 sans label smoothing, ce
-qui suggère qu'elle est trop élevée. Une courbe du compromis
-robustesse/précision en fonction de sigma serait un résultat en soi.
+**Mesure de variance.** Trois à cinq graines sur les configurations retenues.
+C'est la correction qui rendrait les comparaisons fines défendables.
 
-**Augmenter le budget de C&W.** Avec `max_iter=9` de la Table 2 et les
-défauts d'ART, l'attaque n'a pas le budget d'optimisation pour converger. Elle
-est la moins destructrice des six chez nous et la plus destructrice dans
-l'article.
+**Attaque adaptative.** Régénérer les six attaques sur un substitut entraîné
+contre le modèle défendu, puis réévaluer. Environ trois heures. Le résultat
+est publiable quel qu'il soit : soit les défenses tiennent, soit on a mesuré
+une limite que l'article ne rapporte pas.
+
+**Évaluation à trafic bénin intact.** Ne perturber que les lignes d'attaque.
+Aucun calcul GPU, corrige un défaut de modèle de menace.
+
+**Sélection sur le F1 macro** plutôt que sur `val_acc`, et ajout du rappel
+BENIGN minimal comme troisième critère de décision.
+
+**Augmenter le budget de C&W.** Avec les 9 itérations de la Table 2, l'attaque
+ne converge pas. Elle est la moins destructrice chez nous et la plus
+destructrice dans l'article.
 
 **Retirer les six paires de features dupliquées.** Sur 58 features, 52 sont
-réellement indépendantes. L'effet sur les attaques L∞, qui dépensent une
-partie de leur budget sur des dimensions redondantes, mérite d'être mesuré.
+réellement indépendantes ; les attaques L∞ dépensent une partie de leur budget
+sur des dimensions redondantes.
 
 ---
 

@@ -533,9 +533,13 @@ def fig_poids(poids, sortie):
                label="parts égales (0.25)")
     ax.set_ylabel("Poids")
     ax.set_ylim(0, max(vals) * 1.28)
+    ecart = max(vals) - min(vals)
+    commentaire = ("un membre est presque écarté"
+                   if min(vals) < 0.10 else
+                   "les quatre membres restent comparables")
     ax.set_title("Poids retenus par l'optimisation\n"
-                 "Optimisés sur la validation propre, où l'autoencodeur est le "
-                 "plus faible : il est donc presque écarté", fontsize=11)
+                 f"Optimisés sur la validation propre : {commentaire} "
+                 f"(écart {ecart:.3f})", fontsize=11)
     ax.legend(fontsize=9)
     ax.grid(axis="y", alpha=0.3)
     ax.set_axisbelow(True)
@@ -562,8 +566,12 @@ def fig_ensemble_vs_defense(recap, sortie):
     for i, v in enumerate(pts["gain_attaques"]):
         ax1.text(v + 0.002, i, f"{v:+.4f}", va="center", fontsize=9)
     ax1.set_xlabel("Gain moyen en F1 macro sous attaque")
-    ax1.set_title("Gain brut sous attaque\nL'ensemble dépasse chaque défense",
-                  fontsize=10.5)
+    meilleure_def = pts[pts["categorie"] == "défense"]["gain_attaques"].max()
+    meilleur_ens = pts[pts["categorie"] == "ensemble"]["gain_attaques"].max()
+    sous1 = ("L'ensemble dépasse chaque défense"
+             if meilleur_ens > meilleure_def else
+             "Une défense seule dépasse l'ensemble")
+    ax1.set_title(f"Gain brut sous attaque\n{sous1}", fontsize=10.5)
     ax1.grid(axis="x", alpha=0.3)
     ax1.set_axisbelow(True)
     ax1.set_xlim(0, float(pts["gain_attaques"].max()) * 1.25)
@@ -581,8 +589,17 @@ def fig_ensemble_vs_defense(recap, sortie):
     ax2.set_xlim(float(pts2["bilan_net"].min()) - etendue * 0.22,
                  float(pts2["bilan_net"].max()) + etendue * 0.18)
     ax2.set_xlabel("Bilan net (gain sous attaque + coût sur données propres)")
-    ax2.set_title("Bilan net\nLa conclusion s'inverse : une défense seule fait mieux",
-                  fontsize=10.5)
+    # Le classement en bilan net peut coincider avec celui du gain brut ou non
+    # selon les versions retenues. Le sous-titre suit les donnees.
+    tete_gain = pts.iloc[-1]["categorie"]
+    tete_bilan = pts2.iloc[-1]["categorie"]
+    if tete_gain == tete_bilan == "ensemble":
+        sous = "Même conclusion : l'ensemble reste devant"
+    elif tete_bilan == "ensemble":
+        sous = "L'ensemble reste devant, mais l'écart se resserre"
+    else:
+        sous = "La conclusion s'inverse : une défense seule fait mieux"
+    ax2.set_title(f"Bilan net\n{sous}", fontsize=10.5)
     ax2.grid(axis="x", alpha=0.3)
     ax2.set_axisbelow(True)
 
