@@ -55,12 +55,48 @@ from src.defenses.common import (
 import importlib.util
 
 
-DEFENSE_CHECKPOINTS = {
-    "LS":  "defense_ls_best.pth",
-    "AT":  "defense_at_best.pth",
-    "GA":  "defense_ga_best.pth",
-    "DAE": "defense_dae_best.pth",
+# Correspondance entre le nom court utilise dans l'ensemble et la cle de la
+# section reference_runs de configs/config.yaml.
+#
+# Les chemins de checkpoint ne sont plus codes ici : plusieurs executions
+# existent par defense et le fichier *_best.pth pointe simplement sur la
+# derniere lancee. defense_ga_best.pth contenait ainsi sigma=0.1 alors que
+# sigma=0.02 est meilleur sur les quatre criteres. La configuration fige le
+# choix, avec sa justification.
+DEFENSES_REFERENCE = {
+    "LS": "LabelSmoothing",
+    "AT": "AdversarialTraining",
+    "GA": "GaussianAugmentation",
+    "DAE": "DenoisingAutoencoder",
 }
+
+
+def checkpoints_de_reference(cfg):
+    """
+    Nom court -> fichier de checkpoint, d'apres reference_runs.
+
+    Echoue explicitement si la section manque : retomber silencieusement sur
+    les *_best.pth reintroduirait le probleme que cette section corrige.
+    """
+    refs = getattr(cfg, "reference_runs", None)
+    if refs is None:
+        refs = cfg._raw.get("reference_runs")
+    if not refs:
+        raise RuntimeError(
+            "Section reference_runs absente de configs/config.yaml. "
+            "Elle fige quelle execution de chaque defense entre dans "
+            "l'ensemble ; sans elle le choix dependrait de la date des "
+            "fichiers."
+        )
+    choix = {}
+    for court, cle in DEFENSES_REFERENCE.items():
+        if cle not in refs:
+            raise RuntimeError(f"reference_runs.{cle} manquante.")
+        fichier = refs[cle].get("checkpoint")
+        if not fichier:
+            raise RuntimeError(f"reference_runs.{cle}.checkpoint manquant.")
+        choix[court] = (fichier, refs[cle].get("note", ""))
+    return choix
 
 
 def build_dae(cfg, clip_values):
@@ -314,15 +350,18 @@ def main():
     batch_size = cfg.evaluation["batch_size"]
 
     print("Chargement des quatre defenses...")
+    choix = checkpoints_de_reference(cfg)
     defenses = {}
     manquantes = []
-    for nom, fichier in DEFENSE_CHECKPOINTS.items():
+    for nom, (fichier, note) in choix.items():
         modele, detail = load_defense(nom, fichier, cfg, device, checkpoint_dir)
         if modele is None:
             print(f"  {nom:<4} : ECHEC — {detail}")
             manquantes.append(nom)
         else:
             print(f"  {nom:<4} : {fichier} ({detail})")
+            if note:
+                print(f"         {note}")
             defenses[nom] = modele
     print()
 

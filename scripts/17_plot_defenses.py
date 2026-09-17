@@ -124,13 +124,92 @@ def inventaire(log_dir):
     return retenus
 
 
+CLES_REFERENCE = {
+    "LS": "LabelSmoothing",
+    "AT": "AdversarialTraining",
+    "GA": "GaussianAugmentation",
+    "DAE": "DenoisingAutoencoder",
+}
+
+
+def appliquer_reference(cfg, retenus, log_dir):
+    """
+    Remplace le choix par date par celui fige dans reference_runs.
+
+    L'inventaire continue d'afficher toutes les executions trouvees ; seule
+    la selection change. Une execution designee mais absente du disque est
+    signalee plutot que silencieusement remplacee.
+    """
+    refs = getattr(cfg, "reference_runs", None) or cfg._raw.get("reference_runs")
+    if not refs:
+        print("Section reference_runs absente : selection par date conservee.\n")
+        return retenus
+
+    print("Executions de reference (configs/config.yaml) :")
+    for court, cle in CLES_REFERENCE.items():
+        nom_log = refs.get(cle, {}).get("log")
+        if not nom_log:
+            continue
+        chemin = log_dir / nom_log
+        if chemin.exists():
+            retenus[court] = chemin
+            note = refs[cle].get("note", "")
+            print(f"  {NOMS_LONGS[court]:<26} {nom_log}")
+            if note:
+                print(f"  {'':<26} {note}")
+        else:
+            print(f"  {NOMS_LONGS[court]:<26} INTROUVABLE : {nom_log} "
+                  f"-> selection par date conservee")
+    print()
+    return retenus
+
+
+def mcc_multiclasse(cm):
+    """
+    Coefficient de correlation de Matthews multiclasse, calcule depuis la
+    matrice de confusion (Gorodkin 2004). Les predictions ne sont pas
+    stockees dans les .pkl, mais la matrice suffit.
+    """
+    cm = np.asarray(cm, dtype=np.float64)
+    n = cm.sum()
+    if n == 0:
+        return float("nan")
+    t = cm.sum(axis=1)          # effectifs reels par classe
+    p = cm.sum(axis=0)          # effectifs predits par classe
+    c = np.trace(cm)            # predictions correctes
+    num = c * n - float(t @ p)
+    den = np.sqrt(max(n**2 - float(p @ p), 0.0)) * \
+          np.sqrt(max(n**2 - float(t @ t), 0.0))
+    return float(num / den) if den > 0 else 0.0
+
+
+def mcc_binaire(cm, indice_benign=0):
+    """
+    MCC binaire, attaque contre trafic normal.
+
+    L'article reduit explicitement la tache a du binaire pour son Table 9
+    (« we reduce the classification task into binary classification for
+    simplicity »). C'est donc la seule de ses metriques directement
+    comparable a la notre. Positif = attaque, negatif = trafic normal.
+    """
+    cm = np.asarray(cm, dtype=np.float64)
+    tn = cm[indice_benign, indice_benign]
+    fp = cm[indice_benign, :].sum() - tn          # normal predit attaque
+    fn = cm[:, indice_benign].sum() - tn          # attaque predite normale
+    tp = cm.sum() - tn - fp - fn
+    num = tp * tn - fp * fn
+    den = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+    return float(num / den) if den > 0 else 0.0
+
+
 def charger_defense(chemin):
     """Dictionnaire attaque -> metriques, depuis un .pkl de defense."""
     d = joblib.load(chemin)
     return {r["attack"]: r for r in d["results"]}, d
 
 
-def construire_recap(baseline, baseline_acc, baseline_rb, defenses, ensemble):
+def construire_recap(baseline, baseline_acc, baseline_rb, baseline_fw,
+                     baseline_cm, defenses, ensemble):
     """
     Tableau recapitulatif : une ligne par configuration, avec le F1 macro par
     attaque, le gain moyen, le cout sur donnees propres et le bilan net.
@@ -149,6 +228,22 @@ def construire_recap(baseline, baseline_acc, baseline_rb, defenses, ensemble):
         ligne.update({f"f1_macro_{a}": f1[a] for a in ORDRE})
         ligne.update({f"accuracy_{a}": res[a]["accuracy"] for a in ORDRE})
         ligne.update({f"recall_benign_{a}": res[a]["recall_benign"] for a in ORDRE})
+        # F1 pondere : c'est la metrique de l'article. Sa Table 4 donne
+        # accuracy 98.11, recall 98.11, precision 98.11, F1 98.068 — quatre
+        # valeurs quasi identiques, signature d'une moyenne ponderee et non
+        # macro. Notre F1 macro n'a donc aucun equivalent chez eux.
+        ligne.update({f"f1_weighted_{a}": res[a].get("f1_weighted", float("nan"))
+                      for a in ORDRE})
+        # MCC, multiclasse et binaire. L'article rapporte le binaire (Table 9 :
+        # LS 0.698, GA 0.596, AT 0.608, DAE 0.680).
+        for a in ORDRE:
+            cm = res[a].get("confusion_matrix")
+            ligne[f"mcc_multi_{a}"] = mcc_multiclasse(cm) if cm is not None else float("nan")
+            ligne[f"mcc_binaire_{a}"] = mcc_binaire(cm) if cm is not None else float("nan")
+        # Rappel BENIGN minimal sur les six attaques : critere manquant qui
+        # revele les defenses achetant leur robustesse en detruisant le trafic
+        # legitime. GA a sigma=0.05 tombe a 0.012 sous JSMA.
+        ligne["recall_benign_min"] = min(res[a]["recall_benign"] for a in ATTAQUES)
         ligne["gain_attaques"] = gain
         ligne["cout_clean"] = cout
         ligne["bilan_net"] = gain + cout
@@ -156,7 +251,9 @@ def construire_recap(baseline, baseline_acc, baseline_rb, defenses, ensemble):
 
     # Le baseline lui-meme, comme reference explicite.
     ref = {a: {"f1_macro": baseline[a], "accuracy": baseline_acc[a],
-               "recall_benign": baseline_rb[a]} for a in ORDRE}
+               "recall_benign": baseline_rb[a],
+               "f1_weighted": baseline_fw[a],
+               "confusion_matrix": baseline_cm[a]} for a in ORDRE}
     ajouter("Baseline (sans défense)", "référence", ref)
 
     for cle, (res, _) in defenses.items():
@@ -507,6 +604,7 @@ def main():
     fig_dir.mkdir(parents=True, exist_ok=True)
 
     retenus = inventaire(log_dir)
+    retenus = appliquer_reference(cfg, retenus, log_dir)
 
     # Reference du baseline.
     #
@@ -521,8 +619,15 @@ def main():
     res_ref = None
     ref_nom = None
 
-    for f in sorted(glob.glob(str(log_dir / "defense_dae_*.pkl")),
-                    key=os.path.getmtime, reverse=True):
+    refs_cfg = getattr(cfg, "reference_runs", None) or cfg._raw.get("reference_runs") or {}
+    nom_base = refs_cfg.get("Baseline", {}).get("log")
+    candidats = []
+    if nom_base and (log_dir / nom_base).exists():
+        candidats.append(str(log_dir / nom_base))
+    candidats += sorted(glob.glob(str(log_dir / "defense_dae_*.pkl")),
+                        key=os.path.getmtime, reverse=True)
+
+    for f in candidats:
         d = joblib.load(f)
         if d.get("best_epoch") == 0:
             r = {x["attack"]: x for x in d["results"]}
@@ -554,6 +659,8 @@ def main():
     baseline = {a: res_ref[a]["f1_macro"] for a in ORDRE}
     baseline_acc = {a: res_ref[a]["accuracy"] for a in ORDRE}
     baseline_rb = {a: res_ref[a].get("recall_benign", float("nan")) for a in ORDRE}
+    baseline_fw = {a: res_ref[a].get("f1_weighted", float("nan")) for a in ORDRE}
+    baseline_cm = {a: res_ref[a].get("confusion_matrix") for a in ORDRE}
     print(f"Reference du baseline : {ref_nom}")
     print("  F1 macro : " + "  ".join(f"{a}={baseline[a]:.4f}" for a in ORDRE))
     print()
@@ -581,7 +688,8 @@ def main():
         print("Aucun fichier d'ensemble trouve, figures d'ensemble ignorees.")
     print()
 
-    recap = construire_recap(baseline, baseline_acc, baseline_rb, defenses, ensemble)
+    recap = construire_recap(baseline, baseline_acc, baseline_rb, baseline_fw,
+                             baseline_cm, defenses, ensemble)
 
     csv = fig_dir / "defenses_summary.csv"
     recap.to_csv(csv, index=False, float_format="%.6f")
@@ -589,10 +697,12 @@ def main():
     print("=" * 78)
     print("Recapitulatif — source unique pour tout document")
     print("=" * 78)
-    colonnes = ["configuration", "f1_macro_Clean", "gain_attaques",
+    colonnes = ["configuration", "f1_macro_Clean", "f1_weighted_Clean",
+                "mcc_binaire_Clean", "recall_benign_min", "gain_attaques",
                 "cout_clean", "bilan_net"]
     affichage = recap[colonnes].copy()
-    affichage.columns = ["Configuration", "F1 propre", "Gain attaques",
+    affichage.columns = ["Configuration", "F1 macro", "F1 pondéré (article)",
+                         "MCC binaire", "Rappel BENIGN min", "Gain attaques",
                          "Coût propre", "Bilan net"]
     print(affichage.to_string(index=False, float_format=lambda v: f"{v:+.4f}"))
     print("=" * 78)

@@ -40,6 +40,7 @@ contrainte de fonctionnalite du trafic, elle sert uniquement a regulariser
 l'entrainement.
 """
 
+import argparse
 import sys
 import time
 from datetime import datetime
@@ -88,6 +89,14 @@ def train_one_epoch(model, loader, optimizer, criterion_train, device, sigma):
 
 
 def main():
+    parseur = argparse.ArgumentParser(
+        description="Defense par augmentation gaussienne. --sigma permet de "
+                    "balayer plusieurs niveaux de bruit sans editer la config."
+    )
+    parseur.add_argument("--sigma", type=float, default=None,
+                         help="surcharge defenses.GaussianAugmentation.sigma")
+    args = parseur.parse_args()
+
     print("=" * 70)
     print("Defense par Gaussian Augmentation (GA) + Label Smoothing")
     print(f"Date : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -120,7 +129,14 @@ def main():
     epochs = cfg.training["epochs"]
     lr_init = cfg.training["learning_rate"]
     sched = cfg.training["scheduler"]
-    sigma = cfg.defenses["GaussianAugmentation"]["sigma"]
+    # sigma peut etre surcharge en ligne de commande, pour balayer plusieurs
+    # valeurs sans editer la configuration entre chaque execution. L'article
+    # ne documente pas cette valeur ; l'execution a 0.1 plafonnait des le 19e
+    # passage sur 100, signe que le bruit noyait le signal — l'ecart-type
+    # moyen des features vaut 0.103, donc le bruit avait l'amplitude du signal.
+    sigma = args.sigma if args.sigma is not None else \
+        cfg.defenses["GaussianAugmentation"]["sigma"]
+    suffixe = f"_sigma{sigma}".replace(".", "p") if args.sigma is not None else ""
     # Partage avec la defense LS : l'article traite le lissage comme une
     # couche commune aux defenses, pas comme un parametre propre a chacune.
     alpha = cfg.defenses["LabelSmoothing"]["alpha"]
@@ -165,7 +181,7 @@ def main():
     history = {"train_loss": [], "train_acc": [], "val_loss": [],
                 "val_acc": [], "lr": []}
     best_val_acc, best_epoch = 0.0, -1
-    ckpt_path = checkpoint_dir / "defense_ga_best.pth"
+    ckpt_path = checkpoint_dir / f"defense_ga{suffixe}_best.pth"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     debut = time.time()
 
@@ -221,7 +237,7 @@ def main():
 
     log_dir.mkdir(parents=True, exist_ok=True)
     horodatage = datetime.now().strftime("%Y%m%d_%H%M%S")
-    sortie = log_dir / f"defense_ga_{horodatage}.pkl"
+    sortie = log_dir / f"defense_ga{suffixe}_{horodatage}.pkl"
     joblib.dump({
         "results": resultats, "history": history,
         "hyperparameters": {

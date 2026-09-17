@@ -213,7 +213,25 @@ defenses:
   #
   # eps=0.2 reprend la valeur FGSM de la Table 2, alpha = 2.5*eps/steps
   # suit la regle usuelle de Madry et al. pour couvrir la boule epsilon.
+  # epochs : l'execution a 100 passages retenait le 100e comme meilleur, donc
+  # le modele montait encore quand on l'a arrete. La limite venait de nous, pas
+  # du modele. Porte a 150 pour laisser la convergence s'achever ; si elle
+  # intervient avant, le meilleur passage restera inferieur a 150 et le
+  # resultat sera identique.
+  # source : d'ou viennent les exemples adversariaux d'entrainement.
+  #
+  #   "precomputed" (defaut) suit l'Algorithme 3 de l'article, dont l'entree
+  #   est « Previously Generated Adversarial examples of four attack
+  #   categories (FGSM, DEEPFOOL, BIM, JSMA) » et l'etape « generate the
+  #   adversarial augmented dataset for train, test samples ». Les quatre
+  #   jeux viennent de 08b_generate_train_attacks.py.
+  #
+  #   "online" genere du PGD a la volee sur le modele en cours. C'est plus
+  #   fort au sens de Madry et al. 2018, mais ce n'est pas ce que fait
+  #   l'article. Conserve pour comparaison.
   AdversarialTraining:
+    source: "precomputed"
+    epochs: 150
     attack: "PGD"
     ratio: 0.5
     eps: 0.2
@@ -291,6 +309,103 @@ defenses:
     # de 08 sur le test complet). 400 000 lignes stratifiees couvrent les
     # quinze classes et suffisent a apprendre une fonction de purification.
     train_adv_samples: 400000
+
+# ---------- Executions de reference ----------
+# Plusieurs executions existent par defense (quatre pour AT, quatre pour GA,
+# six pour le DAE). Sans cette section, les scripts 16 et 17 retenaient la
+# plus RECENTE, ce qui est arbitraire : defense_ga_best.pth contenait encore
+# sigma=0.1 alors que sigma=0.02 est meilleur sur les quatre criteres.
+#
+# Cette section fige le choix. Tout script consommant une defense doit lire
+# ici, jamais la date de modification d'un fichier.
+reference_runs:
+
+  # Une seule execution, aucun choix. alpha=0.1 conforme a l'article.
+  LabelSmoothing:
+    checkpoint: "defense_ls_best.pth"
+    log: "defense_ls_20260907_034405.pkl"
+    note: "alpha=0.1"
+
+  # Version PGD EN LIGNE a 150 passages, generee a la volee sur le modele en
+  # cours d'entrainement.
+  #
+  # Ce n'est PAS le protocole de l'article, dont l'Algorithme 3 prend en
+  # entree « Previously Generated Adversarial examples of four attack
+  # categories (FGSM, DEEPFOOL, BIM, JSMA) ». C'est un ecart assume, pour la
+  # raison suivante.
+  #
+  # La version conforme (defense_at_4attaques_best.pth) affiche un gain de
+  # +0.3869, quatre fois superieur. Mais ses exemples d'entrainement (08b, sur
+  # le train) et d'evaluation (08, sur le test) proviennent du meme substitut
+  # avec les memes parametres : les lignes different, la distribution des
+  # perturbations non. Le modele a donc deja vu la forme exacte de FGSM, BIM,
+  # DeepFool et JSMA.
+  #
+  # Le signe est net : sous BIM elle atteint 0.9651, soit MIEUX que son F1
+  # macro sur donnees propres (0.8191). Un modele qui classe mieux des donnees
+  # attaquees que des donnees saines n'est pas robuste, il a memorise la forme
+  # de l'attaque. Le +0.3869 mesure donc une reconnaissance de distribution,
+  # pas une robustesse.
+  #
+  # La version PGD en ligne n'a ce probleme sur aucune des six attaques :
+  # elle s'entraine contre PGD genere sur elle-meme, et les six attaques
+  # d'evaluation viennent toutes du substitut. Son +0.0863 est integralement
+  # mesure sur des perturbations non vues.
+  #
+  # Elle est aussi la seule configuration du projet a AMELIORER le F1 macro
+  # sur donnees propres (0.8494 contre 0.8411 pour le baseline), et son rappel
+  # BENIGN minimal reste a 0.8834 la ou la version conforme tombe a 0.5748
+  # sous C&W, rejetant 42 % du trafic legitime.
+  #
+  # A CONSERVER pour le rapport, tire de la version conforme : PGD passe de
+  # 0.0605 a 0.3121 et JSMA de 0.0605 a 0.1092. Ces deux attaques ne sont pas
+  # dans l'entrainement, donc ces gains sont honnetes, et ce sont les seuls
+  # progres reels du projet sur les deux attaques que rien n'arretait.
+  #
+  # La comparaison des deux protocoles est reprise dans la branche
+  # reproduction-fidele, ou la question de la graine de generation sera
+  # tranchee.
+  AdversarialTraining:
+    checkpoint: "defense_at_pgd150_best.pth"
+    log: "defense_at_20260915_184239.pkl"
+    note: "PGD en ligne, 7 pas, 150 passages — attaques d'evaluation non vues"
+    alternative: "defense_at_4attaques_best.pth"
+
+  # sigma=0.02 domine les trois valeurs testees sur les quatre criteres :
+  #   sigma   gain      F1 propre  rappel BENIGN min  bilan
+  #   0.02   +0.1084    0.6813     0.9582             -0.051
+  #   0.05   +0.0948    0.6459     0.0119             -0.100
+  #   0.1    +0.0844    0.5998     0.0184             -0.157
+  #
+  # A sigma 0.05 et 0.1, le modele rejette plus de 98 % du trafic legitime
+  # sous JSMA : inutilisable en pratique, ce que le gain moyen masque.
+  #
+  # L'article ne documente pas sigma. Le balayage est donc un apport de notre
+  # part, pas un ecart au protocole.
+  GaussianAugmentation:
+    checkpoint: "defense_ga_sigma0p02_best.pth"
+    log: "defense_ga_sigma0p02_20260915_162607.pkl"
+    note: "sigma=0.02, balaye sur 0.02 / 0.05 / 0.1"
+
+  # v5 : quatre attaques reelles de 08b, reconstruction complete sans residu.
+  # Seule des six versions a obtenir un gain positif (+0.0737). La v4
+  # convergeait vers l'identite (gain exactement nul) et la v6, a loss
+  # normalisee par groupe, a echoue : DeepFool y accaparait 95.8 % du
+  # gradient, sa perturbation (0.000194) etant dix-neuf fois inferieure au
+  # plancher de bruit du DAE lui-meme (0.003742).
+  DenoisingAutoencoder:
+    checkpoint: "defense_dae_best.pth"
+    log: "defense_dae_20260908_020753.pkl"
+    note: "v5, 58-45-32-45-58, quatre attaques"
+
+  # Le run de DAE ayant converge vers l'identite : son checkpoint EST
+  # l'identite, donc ses sept lignes de resultats sont exactement celles du
+  # baseline seul, mesurees dans les memes conditions que les defenses et avec
+  # recall_benign. attacks_results_*.pkl ne convient pas, le script 08 n'y
+  # ecrivant pas de ligne Clean.
+  Baseline:
+    log: "defense_dae_20260907_223258.pkl"
+    note: "DAE identite, best_epoch == 0"
 
 # ---------- Ensemble ----------
 ensemble:

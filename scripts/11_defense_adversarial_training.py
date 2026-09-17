@@ -133,6 +133,87 @@ def fgsm_attack(model, x, y, criterion_attack, eps, clip_values):
     return torch.clamp(x_adv, borne_min, borne_max).detach()
 
 
+ATTAQUES_ARTICLE = ["fgsm", "bim", "deepfool", "jsma"]
+
+
+def charger_adv_train(attacks_dir):
+    """
+    Charge le sous-echantillon propre du train et les quatre jeux
+    adversariaux produits par 08b, puis construit le jeu augmente.
+
+    L'Algorithme 3 de l'article prend en entree « Previously Generated
+    Adversarial examples of four attack categories (FGSM, DEEPFOOL, BIM,
+    JSMA) » et construit un « adversarial augmented dataset ». On concatene
+    donc le train complet et les quatre jeux adversariaux.
+
+    Les etiquettes des exemples adversariaux sont celles des echantillons
+    d'origine : les attaques sont untargeted, elles ne changent pas la
+    classe reelle du trafic, seulement la prediction du modele.
+    """
+    train_dir = attacks_dir / "train"
+    if not train_dir.exists():
+        raise RuntimeError(
+            f"{train_dir} introuvable. Lancer d'abord "
+            f"scripts/08b_generate_train_attacks.py, ou passer "
+            f"defenses.AdversarialTraining.source a \"online\"."
+        )
+
+    X_sub = np.ascontiguousarray(
+        joblib.load(train_dir / "X_train_clean_sub.pkl"), dtype=np.float32)
+    y_sub = np.asarray(joblib.load(train_dir / "y_train_clean_sub.pkl"))
+    n = len(X_sub)
+
+    blocs_x, blocs_y = [], []
+    print("  Exemples adversariaux d'entrainement (08b) :")
+    for nom in ATTAQUES_ARTICLE:
+        chemin = train_dir / f"X_adv_train_{nom}.pkl"
+        if not chemin.exists():
+            raise RuntimeError(
+                f"{chemin} introuvable. L'Algorithme 3 demande les quatre "
+                f"attaques. Relancer 08b_generate_train_attacks.py."
+            )
+        X_adv = np.ascontiguousarray(joblib.load(chemin), dtype=np.float32)
+        if len(X_adv) != n:
+            raise RuntimeError(
+                f"{chemin.name} a {len(X_adv):,} lignes contre {n:,} pour le "
+                f"sous-echantillon propre : appariement impossible."
+            )
+        l2 = np.linalg.norm(X_adv - X_sub, axis=1).mean()
+        print(f"    {nom:<9} : {len(X_adv):,} exemples, L2 moyen {l2:.4f}")
+        blocs_x.append(X_adv)
+        blocs_y.append(y_sub)
+
+    return np.concatenate(blocs_x), np.concatenate(blocs_y)
+
+
+def train_one_epoch_precalcule(model, loader, optimizer, criterion_train, device):
+    """
+    Une epoch sur le jeu augmente deja constitue.
+
+    Aucune generation a la volee : les exemples adversariaux sont figes,
+    comme dans l'Algorithme 3. C'est aussi bien plus rapide, la generation
+    PGD representant l'essentiel du cout de la version en ligne.
+    """
+    model.train()
+    total_loss, total_correct, total_seen = 0.0, 0, 0
+
+    for x, y in loader:
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
+
+        optimizer.zero_grad()
+        logits = model(x)
+        loss = criterion_train(logits, y)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item() * y.size(0)
+        total_correct += (logits.argmax(dim=1) == y).sum().item()
+        total_seen += y.size(0)
+
+    return total_loss / total_seen, total_correct / total_seen
+
+
 def train_one_epoch(model, loader, optimizer, criterion_train,
                     criterion_attack, device, at_cfg, clip_values):
     """
@@ -227,7 +308,11 @@ def main():
 
     batch_size = cfg.training["batch_size"]
     eval_batch = cfg.evaluation["batch_size"]
-    epochs = cfg.training["epochs"]
+    # Nombre de passages propre a cette defense si la configuration en definit
+    # un, sinon celui du bloc training. Permet de l'allonger sans toucher au
+    # baseline ni aux trois autres defenses.
+    epochs = cfg.defenses["AdversarialTraining"].get(
+        "epochs", cfg.training["epochs"])
     lr_init = cfg.training["learning_rate"]
     sched = cfg.training["scheduler"]
     at_cfg = cfg.defenses["AdversarialTraining"]
@@ -236,9 +321,29 @@ def main():
     # couche commune aux defenses, pas comme un parametre propre a chacune.
     alpha = cfg.defenses["LabelSmoothing"]["alpha"]
 
+    source = at_cfg.get("source", "precomputed").lower()
+    if source == "precomputed":
+        print("Source des exemples adversariaux : quatre attaques de 08b "
+              "(Algorithme 3)")
+        X_adv, y_adv = charger_adv_train(attacks_dir)
+        X_aug = np.concatenate([X_train, X_adv])
+        y_aug = np.concatenate([y_train, y_adv])
+        part_adv = len(X_adv) / len(X_aug)
+        print(f"  Jeu augmente : {len(X_train):,} propres + {len(X_adv):,} "
+              f"adversariaux = {len(X_aug):,} ({part_adv:.1%} adversarial)\n")
+        del X_adv, y_adv
+    elif source == "online":
+        print("Source des exemples adversariaux : generation a la volee\n")
+        X_aug, y_aug = X_train, y_train
+    else:
+        raise ValueError(
+            f"defenses.AdversarialTraining.source vaut {source!r}, "
+            f"attendu 'precomputed' ou 'online'."
+        )
+
     train_loader = DataLoader(
-        TensorDataset(torch.from_numpy(X_train).float(),
-                      torch.from_numpy(y_train).long()),
+        TensorDataset(torch.from_numpy(X_aug).float(),
+                      torch.from_numpy(y_aug).long()),
         batch_size=batch_size, shuffle=True,
         num_workers=cfg.env["num_workers"], pin_memory=True,
     )
@@ -269,12 +374,17 @@ def main():
     print("Entrainement adversarial")
     print(f"  Epochs             : {epochs}")
     print(f"  Learning rate init : {lr_init}")
-    print(f"  Attaque            : {at_cfg['attack']}")
-    print(f"  Epsilon            : {at_cfg['eps']}")
-    if at_cfg["attack"].upper() == "PGD":
-        print(f"  Pas                : {at_cfg['steps']} x alpha={at_cfg['alpha']}")
-        print(f"  Depart aleatoire   : {at_cfg.get('random_start', True)}")
-    print(f"  Ratio adversarial  : {at_cfg['ratio']:.0%}")
+    print(f"  Source             : {source}")
+    if source == "precomputed":
+        print(f"  Attaques           : {', '.join(ATTAQUES_ARTICLE)} "
+              f"(parametres de la Table 2, generees par 08b)")
+    else:
+        print(f"  Attaque            : {at_cfg['attack']}")
+        print(f"  Epsilon            : {at_cfg['eps']}")
+        if at_cfg["attack"].upper() == "PGD":
+            print(f"  Pas                : {at_cfg['steps']} x alpha={at_cfg['alpha']}")
+            print(f"  Depart aleatoire   : {at_cfg.get('random_start', True)}")
+        print(f"  Ratio adversarial  : {at_cfg['ratio']:.0%}")
     print(f"  Label smoothing    : {alpha} (Algorithme 4 de l'article)")
     print(f"    entrainement : lisse | generation d'attaque : non lisse")
     print(f"  Bornes             : {clip_values}")
@@ -291,10 +401,14 @@ def main():
     for epoch in range(1, epochs + 1):
         t0 = time.time()
         lr_now = optimizer.param_groups[0]["lr"]
-        train_loss, train_acc = train_one_epoch(
-            model, train_loader, optimizer, criterion_train,
-            criterion_attack, device, at_cfg, clip_values,
-        )
+        if source == "precomputed":
+            train_loss, train_acc = train_one_epoch_precalcule(
+                model, train_loader, optimizer, criterion_train, device)
+        else:
+            train_loss, train_acc = train_one_epoch(
+                model, train_loader, optimizer, criterion_train,
+                criterion_attack, device, at_cfg, clip_values,
+            )
         val_loss, val_acc = evaluate_loader(model, val_loader,
                                             criterion_eval, device)
         scheduler.step(val_loss)
@@ -316,6 +430,7 @@ def main():
                 "config_hash": cfg.baseline_fingerprint(),
                 "defense": "AdversarialTraining",
                 "at_config": dict(at_cfg), "label_smoothing": alpha,
+                "source": source,
             }, ckpt_path)
             print(f"            -> meilleur modele sauvegarde "
                   f"(val_acc={val_acc:.4f})", flush=True)
@@ -345,6 +460,8 @@ def main():
         "hyperparameters": {
             "epochs": epochs, "batch_size": batch_size, "lr_init": lr_init,
             "at_config": dict(at_cfg), "label_smoothing": alpha,
+            "source": source,
+            "attaques_entrainement": ATTAQUES_ARTICLE if source == "precomputed" else None,
             "clip_values": list(clip_values), "seed": cfg.seed,
         },
         "best_epoch": best_epoch, "best_val_acc": best_val_acc,
