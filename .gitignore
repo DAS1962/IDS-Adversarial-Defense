@@ -43,6 +43,15 @@ results/figures/*.png
 !results/figures/cm_*.png
 !results/figures/defenses_*.png
 !results/figures/ensemble_*.png
+# branche reproduction-fidele
+!results/figures/baselines_*.png
+!results/figures/accuracy_*.png
+!results/figures/ecarts_*.png
+!results/figures/f1_*.png
+!results/figures/heatmap_*.png
+!results/figures/rappel_*.png
+!results/figures/perturbations.png
+!results/figures/*.csv
 
 # Jupyter
 .ipynb_checkpoints/

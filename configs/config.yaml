@@ -1,414 +1,149 @@
+# Reproduction fidele de Awad et al. (2025), Sci Rep 15:14177.
+# On suit leur protocole meme quand il est discutable. Les ecarts avec la
+# branche main sont notes ici.
 
-# ============================================================
-# Configuration globale du projet IDS Adversarial Defense
-#
-# SOURCE UNIQUE DE VERITE. Aucun hyperparametre ne doit etre
-# redefini en dur dans scripts/. Charger via :
-#     from src.utils.config import load_config
-#
-# Les valeurs des attaques suivent la Table 2 de
-# Awad et al. (2025), Sci Rep 15:14177.
-# ============================================================
+seed: 42
 
-# ---------- Environnement ----------
-env:
-  random_seed: 42
-  device: "auto"
-  num_workers: 4
-
-# ---------- Chemins ----------
 paths:
-  data_raw: "data/raw"
-  data_processed: "data/processed"
+  raw: "data/raw"
+  processed: "data/processed"
   checkpoints: "results/checkpoints"
   logs: "results/logs"
-  figures: "results/figures"
   attacks: "results/attacks"
+  figures: "results/figures"
 
-# ---------- Dataset ----------
 dataset:
-  name: "CIC-IDS-2017"
-  num_features: 58
   num_classes: 15
-  test_size: 0.33
-  # 0.05 de l'original (~126k lignes sur CIC-IDS2017), pas 0.15. Une
-  # selection d'epoch n'a pas besoin de 378k exemples de validation, et
-  # chaque point de pourcentage retire au train direct sur des classes
-  # deja ultra-rares (Heartbleed : ~11 exemples au total). 0.05 laisse le
-  # train proche du 67% du papier (~62% au lieu de 52%) tout en gardant
-  # une validation largement suffisante.
-  val_size: 0.05
+  num_features: 58
 
-  # MinMaxScaler et non StandardScaler. L'article ramene les features
-  # dans [0,1] ("feature standardization (scaling) to limit the values
-  # between 0,1"). Avec StandardScaler, torchattacks ecrase a zero toutes
-  # les valeurs negatives via son clamp interne torch.clamp(x, 0, 1),
-  # ce qui detruit l'echantillon et neutralise FGSM/BIM/PGD.
+  # Ordre de la Figure 2 : nettoyage, echelle, equilibrage, selection, split.
+  # Les trois operations qui dependent des donnees arrivent AVANT le split,
+  # donc il y a fuite. C'est leur protocole, on le reproduit.
+
+  # Le papier ne parle pas de doublons. On ne les retire pas.
+  drop_duplicates: false
+
+  # "scaling to limit the values between 0,1"
   scaler: "MinMaxScaler"
-
-  # Bornes du domaine, passees a ART via clip_values. Doivent correspondre
-  # a la sortie du scaler ci-dessus.
   clip_values: [0.0, 1.0]
 
-  # Strategie SMOTE : cap par classe (cle = id de classe apres LabelEncoder,
-  # valeur = effectif cible apres SMOTE). Les classes absentes d'ici gardent
-  # leur effectif reel, inchange. Plafonner l'expansion evite la sur-
-  # generation extreme sur les classes ultra-rares : sans cap, Heartbleed
-  # (7 exemples reels dans le train a 67%) serait monte a l'effectif de
-  # BENIGN (~1.4M), soit un ratio d'expansion de 200 000x qui noie le signal
-  # reel sous des interpolations synthetiques. C'est le plus gros
-  # hyperparametre du projet hors de l'article (l'article equilibre
-  # totalement, sans discuter ce probleme) et probablement la plus grande
-  # partie de l'ecart d'accuracy avec l'article (99.69% vs 98.11%) : il
-  # vivait auparavant en dur dans scripts/05_split_and_prepare.py et
-  # n'entrait dans aucune empreinte de configuration - le modifier et
-  # regenerer les donnees ne changeait aucun hash, donc aucun artefact en
-  # aval n'etait invalide. Voir Config.data_fingerprint_data().
-  smote_strategy:
-    3: 50000    # DoS GoldenEye (etait 6,891 dans le train a 67%)
-    7: 50000    # FTP-Patator (3,974)
-    6: 50000    # DoS slowloris (3,608)
-    5: 50000    # DoS Slowhttptest (3,503)
-    11: 30000   # SSH-Patator (2,157)
-    1: 30000    # Bot (1,305)
-    12: 10000   # Web Attack Brute Force (985)
-    14: 5000    # Web Attack XSS (437)
-    9: 1000     # Infiltration (24) - cap raisonnable
-    13: 1000    # Web Attack SQL Injection (14)
-    8: 500      # Heartbleed (7) - cap tres bas car ultra-rare
+  # "selecting 50% only of each class member except those containing less
+  # than 2000 instances they are taken entirely"
+  balance_fraction: 0.5
+  balance_min_instances: 2000
 
-# ---------- Modele DNN (baseline, cible de l'evaluation) ----------
-# Table 3 de l'article : 512-256-15
+  test_size: 0.33
+  # Le papier n'a pas de set de validation (validation_split 0.33 dans Keras,
+  # pris sur le train). On en fait un vrai pour choisir les hyperparametres
+  # qu'ils ne documentent pas.
+  val_size: 0.05
+
+feature_selection:
+  # Ils gardent les features NON fonctionnelles et retirent les plus
+  # importantes, pour qu'un attaquant puisse perturber sans casser le trafic.
+  # C'est l'inverse de ce qu'on a fait sur main.
+  mode: "ert"          # "ert" = leur methode, "figure3" = leur liste exacte
+  n_estimators: 100
+  n_remove: 20
+
+  # Les 20 features de leur Figure 3, transcrites du PDF. Utilise seulement
+  # si mode = figure3. Les noms viennent de leur graphique, en minuscules ;
+  # la correspondance vers les vrais noms du CSV est faite dans le script.
+  figure3:
+    - psh_flag_count
+    - destination_port
+    - min_seg_size_forward
+    - bwd_packet_length_mean
+    - packet_length_std
+    - bwd_packet_length_std
+    - average_packet_size
+    - bwd_packet_length_min
+    - init_win_bytes_forward
+    - ack_flag_count
+    - bwd_packet_length_max
+    - avg_bwd_segment_size
+    - fwd_iat_max
+    - idle_min
+    - packet_length_mean
+    - idle_mean
+    - flow_iat_max
+    - max_packet_length
+    - packet_length_variance
+    - idle_max
+
+# Table 3
 model:
-  architecture: "DNN"
   hidden_layers: [512, 256]
-  activation: "relu"
-  output_activation: "softmax"
-  dropout: 0.0
+  learning_rate: 0.01
+  epochs: 30
+  batch_size: 128
 
-# ---------- Modele substitut (source des exemples adversariaux) ----------
-# L'article ne genere PAS les attaques sur le baseline. Il utilise un
-# substitut pour placer l'attaquant en semi-white box : architecture connue,
-# parametres d'initialisation inconnus. Generer sur le baseline revient a
-# du white box complet et rend les resultats incomparables a l'article.
+  # Le lr 0.01 du papier ne converge pas : val_acc atteint 0.9664 des
+  # l'epoch 3 puis oscille entre 0.943 et 0.970 pendant 27 epochs. On avait
+  # le meme comportement sur main. La variante baisse le lr et ajoute un
+  # scheduler, tout le reste identique, pour isoler l'effet.
+  variante_lr:
+    active: false
+    learning_rate: 0.001
+    # 30 epochs ne suffisent pas : le meilleur etait le 29e sur 30, val_loss
+    # descendait encore et le scheduler venait de passer son 2e palier.
+    epochs: 100
+    scheduler:
+      factor: 0.5
+      patience: 3
+      min_lr: 1.0e-5
+
 substitute:
-  input_dim: 58
   hidden_layers: [100, 100]
-  output_dim: 15
-  activation: "relu"
   learning_rate: 0.01
   epochs: 30
   batch_size: 256
-  # L'article rapporte un F1 moyen de 0.98 sur donnees propres, comparable
-  # au baseline. Critere de validation du substitut avant de generer.
-  # Compare en F1 PONDERE (weighted), pas macro : le baseline lui-meme fait
-  # ~99.7% de F1 pondere contre ~80% de F1 macro sur ce dataset a 15 classes
-  # tres desequilibrees (voir README). Un F1 macro de 0.98 serait quasi
-  # impossible a atteindre pour un reseau de 17k parametres ; le 0.98 de
-  # l'article correspond presque certainement a une moyenne ponderee.
   f1_cible: 0.98
 
-# ---------- Entrainement du baseline ----------
-# lr=0.01 (Table 3 de l'article) produisait une instabilite claire des la
-# 2e epoch sous StandardScaler (voir README, iterations v1/v2). lr=0.001 +
-# ReduceLROnPlateau convergeait proprement dans ce regime. ATTENTION : ces
-# valeurs n'ont ete validees que sous StandardScaler (features centrees-
-# reduites). Sous MinMaxScaler (regime actuel), l'echelle des gradients
-# change, en particulier pour les features CIC-IDS a distribution tres
-# asymetrique dont la masse se concentre pres de 0 apres mise a l'echelle.
-# Ne pas presumer que lr=0.001/epochs=50 restent optimaux : regarder les
-# courbes train/val du premier reentrainement sous MinMaxScaler avant de
-# conclure, et ajuster si l'entrainement est instable ou n'a pas converge.
-#
-# La fraction de validation vit UNIQUEMENT dans dataset.val_size : il n'y a
-# plus de deuxieme "validation_split" ici. L'ancienne cle valait 0.33 et
-# designait en realite le test set, pas une validation : 06_train_baseline.py
-# selectionnait le meilleur epoch sur best_test_acc, ce qui biaise
-# l'accuracy rapportee a la hausse (le test set sert alors a choisir le
-# modele, pas seulement a l'evaluer). Desormais le choix du meilleur epoch
-# et le pas du scheduler se font sur le split de validation issu de
-# dataset.val_size ; le test set n'est touche qu'une fois, pour le rapport
-# final.
-training:
-  batch_size: 128
-  epochs: 100
-  learning_rate: 0.001
-  optimizer: "adam"
-  loss: "cross_entropy"
-  model_selection_metric: "val_acc"
-  scheduler:
-    enabled: true
-    monitor: "val_loss"
-    factor: 0.5
-    patience: 5
-    min_lr: 1.0e-5
-
-# ---------- Attaques (Table 2 de l'article) ----------
+# Table 2
 attacks:
   FGSM:
     eps: 0.2
-    norm: "inf"
-
   BIM:
     eps: 0.3
     alpha: 0.01
     steps: 100
-    norm: "inf"
-
   PGD:
     eps: 0.3
     alpha: 0.01
     steps: 100
-    norm: "inf"
-
   DeepFool:
-    # Dans ART, 'epsilon' est le facteur de depassement (overshoot),
-    # pas une borne de perturbation. La valeur 1e-6 de la Table 2
-    # correspond bien a ce parametre.
     epsilon: 1.0e-6
     max_iter: 100
-    norm: "l2"
-
   JSMA:
-    # Table 2 : 0.1. L'ancienne version du script utilisait 0.3,
-    # soit une perturbation par feature trois fois plus forte.
     theta: 0.1
-    # Fraction maximale de features modifiables. L'article ne la documente
-    # pas ; 1.0 laisse l'attaque libre plutot que de la brider a 0.15.
     gamma: 1.0
-
   CW:
-    # Table 2 : 9 iterations.
     max_iter: 9
-    # Les quatre parametres suivants etaient laisses aux defauts d'ART.
-    # Ils sont maintenant explicites : subir un defaut de bibliotheque
-    # n'est pas un choix experimental documentable.
     confidence: 0.0
     binary_search_steps: 10
     initial_const: 0.01
     learning_rate: 0.01
-    norm: "l2"
 
-# ---------- Perimetre d'evaluation des attaques ----------
 evaluation:
-  # "full" : tout le test set. "sample" : echantillon stratifie.
-  # Les six attaques doivent partager le meme perimetre, sinon le tableau
-  # de resultats melange des tailles d'echantillon incomparables.
-  # JSMA tournait sur 30 000 alors que les cinq autres tournaient sur
-  # 831 864, ce qui n'etait signale nulle part.
-  scope: "full"
-  sample_size: 50000
+  # "From the testing data set we select 20,000 samples (5000 for each attack)"
+  # Ils ne disent pas combien de benin. On prend 50/50 par symetrie avec
+  # l'entrainement, ou c'est explicite.
+  scope: "sample"      # "sample" = 20000 comme eux, "full" = tout le test
+  n_samples: 20000
+  benign_fraction: 0.5
   batch_size: 512
 
-# ---------- Defenses ----------
+# Leurs quatre defenses. Les valeurs non documentees sont marquees.
 defenses:
-  # Adversarial training. L'article (Algorithme 4) ne documente ni epsilon
-  # ni le nombre de pas de l'attaque d'entrainement. Choix retenu : PGD a
-  # 7 pas plutot que FGSM en un pas. Madry et al. 2018, que l'article cite
-  # en reference pour cette defense, montre que FGSM a un pas conduit au
-  # masquage de gradient : le modele apprend a rendre ses gradients
-  # inexploitables en un pas sans devenir reellement robuste, et la defense
-  # ne transfere pas aux attaques iteratives. C'est exactement ce qu'on
-  # observait : +0.137 de F1 macro contre FGSM mais +0.011 contre PGD.
-  #
-  # eps=0.2 reprend la valeur FGSM de la Table 2, alpha = 2.5*eps/steps
-  # suit la regle usuelle de Madry et al. pour couvrir la boule epsilon.
-  # epochs : l'execution a 100 passages retenait le 100e comme meilleur, donc
-  # le modele montait encore quand on l'a arrete. La limite venait de nous, pas
-  # du modele. Porte a 150 pour laisser la convergence s'achever ; si elle
-  # intervient avant, le meilleur passage restera inferieur a 150 et le
-  # resultat sera identique.
-  # source : d'ou viennent les exemples adversariaux d'entrainement.
-  #
-  #   "precomputed" (defaut) suit l'Algorithme 3 de l'article, dont l'entree
-  #   est « Previously Generated Adversarial examples of four attack
-  #   categories (FGSM, DEEPFOOL, BIM, JSMA) » et l'etape « generate the
-  #   adversarial augmented dataset for train, test samples ». Les quatre
-  #   jeux viennent de 08b_generate_train_attacks.py.
-  #
-  #   "online" genere du PGD a la volee sur le modele en cours. C'est plus
-  #   fort au sens de Madry et al. 2018, mais ce n'est pas ce que fait
-  #   l'article. Conserve pour comparaison.
-  AdversarialTraining:
-    source: "precomputed"
-    epochs: 150
-    attack: "PGD"
-    ratio: 0.5
-    eps: 0.2
-    steps: 7
-    alpha: 0.071
-    random_start: true
-  GaussianAugmentation:
-    sigma: 0.1
   LabelSmoothing:
-    alpha: 0.1
-  # Denoising autoencoder. L'article (Algorithme 5, etape 2) entraine le DAE
-  # sur "total samples by concatenating (adv examples, real samples)" et sa
-  # fonction objectif est min E[||g(x + x_adv) - x||^2] : le DAE doit
-  # reconstruire l'echantillon propre depuis l'echantillon ADVERSARIAL, pas
-  # seulement depuis une version bruitee au hasard. La version precedente ne
-  # voyait que du bruit gaussien : c'etait un debruiteur gaussien, pas un
-  # purificateur adversarial, d'ou son echec (-0.036 de F1 macro).
-  #
-  # adv_ratio : proportion du batch remplacee par des exemples adversariaux
-  # generes a la volee. Le reste recoit du bruit gaussien, ce qui conserve
-  # la capacite de debruitage generique.
-  # hidden_dim et noise_factor sont conserves : l'article ne les documente
-  # pas et rien n'indique qu'ils soient en cause.
-  # v4. Trois versions precedentes ont echoue avec un diagnostic mesure :
-  # le DAE modifiait 31.5% de la variance d'une entree PROPRE (MSE 0.00719
-  # entre x et DAE(x) sans aucune corruption), 29 features sur 58 perdaient
-  # plus de la moitie de leur ecart-type, et le F1 macro chutait de 0.8527 a
-  # 0.2109. Cause : le batch d'entrainement etait corrompu a 100%, donc le
-  # reseau n'a jamais appris a laisser passer une entree propre. Il applique
-  # sa correction a des donnees qui n'en ont pas besoin et sur-corrige.
-  #
-  # clean_ratio : fraction du batch laissee intacte (paires propre -> propre).
-  # L'Algorithme 5 de l'article le prescrit explicitement : "Construct total
-  # samples by concatenating (adv examples, real samples)".
-  #
-  # noise_factor a 0 : le bruit gaussien etait un ajout de notre part, absent
-  # de l'Algorithme 5. A sigma=0.1 il portait le plancher theorique de
-  # reconstruction (Wiener) a 17% de la variance des donnees, contre 1.2% a
-  # sigma=0.02. Le DAE plafonnait a 0.0073, soit moins du double de ce
-  # plancher : la tache elle-meme etait quasi impossible.
-  # v6. Deux changements par rapport a v5.
-  #
-  # hidden_dim 32 -> 40, avec deux couches cachees par cote au lieu d'une
-  # (58-52-46-40-46-52-58, ~14 800 parametres contre 8 280). Test de
-  # l'hypothese d'une limite de capacite.
-  #
-  # loss_normalisee : la MSE brute etait dominee par JSMA. Mesure des
-  # amplitudes de corruption par 08b, converties en MSE par feature :
-  #   jsma     0.761196  (33x la variance des donnees)
-  #   fgsm     0.006443
-  #   bim      0.002511
-  #   deepfool 0.000037
-  # Avec un batch a 50% propre et 12.5% par attaque, JSMA representait
-  # 98.8% de la loss pour un gain en F1 macro de +0.002, alors que FGSM
-  # (+0.168), BIM (+0.137) et DeepFool (+0.103) se partageaient 1.1%. Le
-  # DAE consacrait donc tout son effort a une attaque qu'il ne corrige pas,
-  # et la projection agressive qui en resultait detruisait aussi les
-  # entrees saines (-0.39 de F1 macro sur donnees propres).
-  # La loss normalisee divise l'erreur de chaque groupe par l'amplitude de
-  # sa propre corruption, puis moyenne les cinq groupes : chacun pese 20%.
-  # L'Algorithme 5 impose de concatener les quatre attaques, ce qui reste
-  # le cas ; il ne specifie pas la ponderation de l'esperance.
+    alpha: 0.1              # non documente
+  GaussianAugmentation:
+    sigma: 0.02             # non documente, repris du balayage fait sur main
+  AdversarialTraining:
+    # Algorithme 3 : les quatre attaques pre-generees
+    attacks: ["fgsm", "bim", "deepfool", "jsma"]
   DenoisingAutoencoder:
-    hidden_dim: 32
-    loss_normalisee: false
-    l1_reg: 1.0e-4
-    noise_factor: 0.0
+    hidden_dim: 32          # non documente
+    l1_reg: 1.0e-4          # non documente
     clean_ratio: 0.5
-    adv_ratio: 0.5
-    adv_eps: 0.05
-    # Taille du sous-echantillon stratifie du train sur lequel 08b genere
-    # les exemples adversariaux d'entrainement du DAE. Les quatre attaques
-    # de l'Algorithme 5 sur les 1 819 198 lignes du train couteraient environ
-    # quatre heures de GPU (DeepFool ~1h40, JSMA ~2h extrapolees des mesures
-    # de 08 sur le test complet). 400 000 lignes stratifiees couvrent les
-    # quinze classes et suffisent a apprendre une fonction de purification.
-    train_adv_samples: 400000
-
-# ---------- Executions de reference ----------
-# Plusieurs executions existent par defense (quatre pour AT, quatre pour GA,
-# six pour le DAE). Sans cette section, les scripts 16 et 17 retenaient la
-# plus RECENTE, ce qui est arbitraire : defense_ga_best.pth contenait encore
-# sigma=0.1 alors que sigma=0.02 est meilleur sur les quatre criteres.
-#
-# Cette section fige le choix. Tout script consommant une defense doit lire
-# ici, jamais la date de modification d'un fichier.
-reference_runs:
-
-  # Une seule execution, aucun choix. alpha=0.1 conforme a l'article.
-  LabelSmoothing:
-    checkpoint: "defense_ls_best.pth"
-    log: "defense_ls_20260907_034405.pkl"
-    note: "alpha=0.1"
-
-  # Version PGD EN LIGNE a 150 passages, generee a la volee sur le modele en
-  # cours d'entrainement.
-  #
-  # Ce n'est PAS le protocole de l'article, dont l'Algorithme 3 prend en
-  # entree « Previously Generated Adversarial examples of four attack
-  # categories (FGSM, DEEPFOOL, BIM, JSMA) ». C'est un ecart assume, pour la
-  # raison suivante.
-  #
-  # La version conforme (defense_at_4attaques_best.pth) affiche un gain de
-  # +0.3869, quatre fois superieur. Mais ses exemples d'entrainement (08b, sur
-  # le train) et d'evaluation (08, sur le test) proviennent du meme substitut
-  # avec les memes parametres : les lignes different, la distribution des
-  # perturbations non. Le modele a donc deja vu la forme exacte de FGSM, BIM,
-  # DeepFool et JSMA.
-  #
-  # Le signe est net : sous BIM elle atteint 0.9651, soit MIEUX que son F1
-  # macro sur donnees propres (0.8191). Un modele qui classe mieux des donnees
-  # attaquees que des donnees saines n'est pas robuste, il a memorise la forme
-  # de l'attaque. Le +0.3869 mesure donc une reconnaissance de distribution,
-  # pas une robustesse.
-  #
-  # La version PGD en ligne n'a ce probleme sur aucune des six attaques :
-  # elle s'entraine contre PGD genere sur elle-meme, et les six attaques
-  # d'evaluation viennent toutes du substitut. Son +0.0863 est integralement
-  # mesure sur des perturbations non vues.
-  #
-  # Elle est aussi la seule configuration du projet a AMELIORER le F1 macro
-  # sur donnees propres (0.8494 contre 0.8411 pour le baseline), et son rappel
-  # BENIGN minimal reste a 0.8834 la ou la version conforme tombe a 0.5748
-  # sous C&W, rejetant 42 % du trafic legitime.
-  #
-  # A CONSERVER pour le rapport, tire de la version conforme : PGD passe de
-  # 0.0605 a 0.3121 et JSMA de 0.0605 a 0.1092. Ces deux attaques ne sont pas
-  # dans l'entrainement, donc ces gains sont honnetes, et ce sont les seuls
-  # progres reels du projet sur les deux attaques que rien n'arretait.
-  #
-  # La comparaison des deux protocoles est reprise dans la branche
-  # reproduction-fidele, ou la question de la graine de generation sera
-  # tranchee.
-  AdversarialTraining:
-    checkpoint: "defense_at_pgd150_best.pth"
-    log: "defense_at_20260915_184239.pkl"
-    note: "PGD en ligne, 7 pas, 150 passages — attaques d'evaluation non vues"
-    alternative: "defense_at_4attaques_best.pth"
-
-  # sigma=0.02 domine les trois valeurs testees sur les quatre criteres :
-  #   sigma   gain      F1 propre  rappel BENIGN min  bilan
-  #   0.02   +0.1084    0.6813     0.9582             -0.051
-  #   0.05   +0.0948    0.6459     0.0119             -0.100
-  #   0.1    +0.0844    0.5998     0.0184             -0.157
-  #
-  # A sigma 0.05 et 0.1, le modele rejette plus de 98 % du trafic legitime
-  # sous JSMA : inutilisable en pratique, ce que le gain moyen masque.
-  #
-  # L'article ne documente pas sigma. Le balayage est donc un apport de notre
-  # part, pas un ecart au protocole.
-  GaussianAugmentation:
-    checkpoint: "defense_ga_sigma0p02_best.pth"
-    log: "defense_ga_sigma0p02_20260915_162607.pkl"
-    note: "sigma=0.02, balaye sur 0.02 / 0.05 / 0.1"
-
-  # v5 : quatre attaques reelles de 08b, reconstruction complete sans residu.
-  # Seule des six versions a obtenir un gain positif (+0.0737). La v4
-  # convergeait vers l'identite (gain exactement nul) et la v6, a loss
-  # normalisee par groupe, a echoue : DeepFool y accaparait 95.8 % du
-  # gradient, sa perturbation (0.000194) etant dix-neuf fois inferieure au
-  # plancher de bruit du DAE lui-meme (0.003742).
-  DenoisingAutoencoder:
-    checkpoint: "defense_dae_best.pth"
-    log: "defense_dae_20260908_020753.pkl"
-    note: "v5, 58-45-32-45-58, quatre attaques"
-
-  # Le run de DAE ayant converge vers l'identite : son checkpoint EST
-  # l'identite, donc ses sept lignes de resultats sont exactement celles du
-  # baseline seul, mesurees dans les memes conditions que les defenses et avec
-  # recall_benign. attacks_results_*.pkl ne convient pas, le script 08 n'y
-  # ecrivant pas de ligne Clean.
-  Baseline:
-    log: "defense_dae_20260907_223258.pkl"
-    note: "DAE identite, best_epoch == 0"
-
-# ---------- Ensemble ----------
-ensemble:
-  method: "majority_voting"
-  optimize_weights: true
-  bayesian_n_calls: 50
