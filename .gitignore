@@ -76,13 +76,24 @@ results/logs/*.pkl
 
 # Artefacts de la branche main : ils vivent sur main, pas ici. Le worktree
 # partage l'arborescence de travail, donc ils sont presents sur disque.
-scripts/0[2-9]*_*
-scripts/1[0-7]_*
-!scripts/02_baseline*
-!scripts/03_attaques*
-!scripts/04_evaluation*
-!scripts/05_tableau_comparaison*
-!scripts/06_figures*
+scripts/02_explore_dataset.py
+scripts/03_preprocess_dataset.py
+scripts/04_feature_selection.*
+scripts/05_split_and_prepare.*
+scripts/06_train_baseline.*
+scripts/07_plot_results.*
+scripts/08_generate_attacks.*
+scripts/08b_generate_train_attacks.*
+scripts/09_generate_attacks_jsma_sample.*
+scripts/10_evaluate_and_plot_attacks.*
+scripts/11_defense_adversarial_training.*
+scripts/12_defense_label_smoothing.*
+scripts/13_defense_ga*.*
+scripts/13_defense_gaussian_augmentation.*
+scripts/14_defense_denoising_autoencoder.*
+scripts/15_balanced_evaluation.*
+scripts/16_ensemble_aggregation.*
+scripts/17_plot_defenses.*
 src/defenses/common.py
 src/models/substitute.py
 results/figures/attacks_*
@@ -92,3 +103,8 @@ results/figures/ensemble_*
 results/figures/final_*
 results/checkpoints/baseline_best.pth
 results/checkpoints/baseline_v*.pth
+
+# CSV de cette branche : les regles defenses_* et ensemble_* ci-dessus
+# visaient les artefacts de main, pas ceux-ci.
+!results/figures/defenses_completes.csv
+!results/figures/ensemble_complet.csv

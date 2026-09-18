@@ -47,3 +47,40 @@ class Substitut(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+class DAE(nn.Module):
+    """
+    Autoencodeur debruiteur creux, Algorithme 5.
+
+    Le papier : "we use the sparse autoencoder that learns better
+    representations and outperforms the original autoencoder due to L1
+    sparsity regularization which makes its activations sparser".
+
+    Il ne dit pas la taille du goulot. On prend 32, moitie moins que les 58
+    features d'entree.
+
+    Le goulot est LINEAIRE et non ReLU : un ReLU y annulerait toute
+    coordonnee negative, soit environ la moitie de l'espace latent. C'est un
+    probleme mesure sur la branche main, ou 51.5 % des activations etaient
+    negatives.
+    """
+
+    def __init__(self, input_dim=58, bottleneck=32):
+        super().__init__()
+        cache = (input_dim + bottleneck) // 2
+        self.encodeur = nn.Sequential(
+            nn.Linear(input_dim, cache), nn.ReLU(),
+            nn.Linear(cache, bottleneck),
+        )
+        self.decodeur = nn.Sequential(
+            nn.Linear(bottleneck, cache), nn.ReLU(),
+            nn.Linear(cache, input_dim),
+        )
+        self.dims = (input_dim, cache, bottleneck)
+
+    def forward(self, x):
+        return self.decodeur(self.encodeur(x))
+
+    def latent(self, x):
+        return self.encodeur(x)
