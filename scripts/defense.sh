@@ -24,7 +24,9 @@ module load python/3.11
 source ~/ENV/bin/activate
 cd ~/IDS-Reproduction-Fidele
 
-python -u "scripts/${SCRIPT}.py"
+# shift retire le nom du script, "$@" relaie le reste
+shift
+python -u "scripts/${SCRIPT}.py" "$@"
 statut=$?
 
 echo

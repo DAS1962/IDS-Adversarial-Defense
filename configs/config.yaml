@@ -87,7 +87,9 @@ model:
     learning_rate: 0.001
     # 30 epochs ne suffisent pas : le meilleur etait le 29e sur 30, val_loss
     # descendait encore et le scheduler venait de passer son 2e palier.
-    epochs: 100
+    # A 100, le meilleur etait le 93e : il restait encore de la marge, d'ou
+    # cette serie a 150.
+    epochs: 150
     scheduler:
       factor: 0.5
       patience: 3
@@ -139,7 +141,13 @@ defenses:
   LabelSmoothing:
     alpha: 0.1              # non documente
   GaussianAugmentation:
-    sigma: 0.02             # non documente, repris du balayage fait sur main
+    # Non documente par le papier. Sur main, sigma 0.02 fonctionnait avec un
+    # ecart-type moyen de 0.103, soit un bruit a 19 % du signal. Ici les
+    # features non fonctionnelles ont un ecart-type de 0.0537, donc le meme
+    # sigma represente 37 % du signal : le modele plafonne a 88 % de val_acc
+    # et rejette 95 % du trafic legitime sous JSMA. sigma 0.01 retablit le
+    # rapport de 19 %.
+    sigma: 0.01
   AdversarialTraining:
     # Algorithme 3 : les quatre attaques pre-generees
     attacks: ["fgsm", "bim", "deepfool", "jsma"]

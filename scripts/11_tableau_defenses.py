@@ -10,6 +10,7 @@ Il ne dit pas sur quoi portent les moyennes de sa Table 7 : sur les six
 attaques, sur les quatre, ou sur donnees propres. On donne les trois.
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -55,24 +56,33 @@ TABLE7 = {
 TABLE9 = {"ls": 0.698, "dae": 0.680, "at": 0.608, "ga": 0.596}
 
 
-def charger(log_dir):
+def charger(log_dir, suffixe=""):
     res = {}
     for court, _ in DEFENSES:
-        fichiers = sorted(Path(log_dir).glob(f"defense_{court}_*.pkl"))
+        fichiers = sorted(Path(log_dir).glob(f"defense_{court}{suffixe}_*.pkl"))
         if fichiers:
             res[court] = joblib.load(fichiers[-1])["resultats"]
-    ev = sorted(Path(log_dir).glob("evaluation_*.pkl"))
+
+    ev = sorted(Path(log_dir).glob(f"evaluation{suffixe}_*.pkl"))
     base = None
     if ev:
         d = joblib.load(ev[-1])
         cle = [k for k in d["resultats"] if "reduit" in k][0]
         base = d["resultats"][cle]
-    return res, base
+
+    ens = sorted(Path(log_dir).glob(f"ensemble{suffixe}_*.pkl"))
+    ensemble = joblib.load(ens[-1])["resultats"] if ens else {}
+    return res, base, ensemble
 
 
 def main():
+    parseur = argparse.ArgumentParser()
+    parseur.add_argument("--suffixe", default="",
+                         help="suffixe des fichiers de resultats")
+    args = parseur.parse_args()
+
     cfg = load_config()
-    res, base = charger(cfg.paths["logs"])
+    res, base, ensemble = charger(cfg.paths["logs"], args.suffixe)
     if base is None:
         raise RuntimeError("Aucun evaluation_*.pkl")
 
@@ -85,7 +95,8 @@ def main():
     print("=" * 110)
     print("LES QUATRE DEFENSES - TOUTES LES METRIQUES")
     print("=" * 110)
-    print("Baseline de reference : lr 0.001, 100 epochs")
+    n_ep = 150 if args.suffixe == "_ep150" else 100
+    print(f"Baseline de reference : lr 0.001, {n_ep} epochs")
     print("Test : 20 000 lignes a 50 % benin, plancher a 50 %")
     print()
 
@@ -167,9 +178,33 @@ def main():
               + " ".join(f"{v(c,a,'recall_benign'):>7.2f}%" for c, _ in DEFENSES))
     print()
 
-    # --- 6. Bilan ---
+    # --- 6. Ensemble ---
+    if ensemble:
+        print("-" * 110)
+        print("6. ENSEMBLE — face a leur Table 8")
+        print("-" * 110)
+        print("Leur Table 8 : vote majoritaire 84.35 %, optimise 87.49 %,")
+        print("moyenne ponderee 84.45 %, optimisee 86.11 %.")
+        print()
+        print(f"{'Attaque':<10} {'Base':>8} | " +
+              " ".join(f"{n[:12]:>13}" for n in ensemble))
+        for a in ORDRE:
+            print(f"{a:<10} {b(a,'f1_macro'):>7.2f}% | " +
+                  " ".join(f"{100*ensemble[n][a]['f1_macro']:>12.2f}%"
+                           for n in ensemble))
+        print()
+        print(f"{'Methode':<28} {'Gain':>9} {'Cout':>9} {'Bilan':>9} "
+              f"{'Acc. moy.':>10}")
+        for n, r in ensemble.items():
+            g = np.mean([r[a]["f1_macro"] - base[a]["f1_macro"] for a in ATTAQUES])
+            c = r["Clean"]["f1_macro"] - base["Clean"]["f1_macro"]
+            acc = np.mean([r[a]["accuracy"] for a in ORDRE])
+            print(f"{n:<28} {g:>+9.4f} {c:>+9.4f} {g+c:>+9.4f} {100*acc:>9.2f}%")
+        print()
+
+    # --- 7. Bilan ---
     print("=" * 110)
-    print("6. BILAN")
+    print("7. BILAN")
     print("=" * 110)
     print(f"{'Defense':<24} {'Gain':>9} {'Cout':>9} {'Bilan net':>11} "
           f"{'RecBEN min':>11}")
@@ -200,6 +235,14 @@ def main():
             d.update({k: val for k, val in res[court][a].items()
                       if k not in ("confusion_matrix", "attaque")})
             lignes.append(d)
+    for n, r in ensemble.items():
+        for a in ORDRE:
+            d = {"defense": "ensemble", "nom": n, "attaque": a,
+                 "papier_accuracy": np.nan}
+            d.update({k: val for k, val in r[a].items()
+                      if k not in ("confusion_matrix", "attaque")})
+            lignes.append(d)
+
     for a in ORDRE:
         d = {"defense": "baseline", "nom": "Baseline lr reduit", "attaque": a,
              "papier_accuracy": np.nan}
@@ -207,7 +250,7 @@ def main():
                   if k not in ("confusion_matrix", "attaque")})
         lignes.append(d)
 
-    sortie = Path(cfg.paths["figures"]) / "defenses_completes.csv"
+    sortie = Path(cfg.paths["figures"]) / f"defenses_completes{args.suffixe}.csv"
     pd.DataFrame(lignes).to_csv(sortie, index=False, float_format="%.6f")
     print(f"\nCSV : {sortie}")
 

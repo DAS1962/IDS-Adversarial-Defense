@@ -9,6 +9,7 @@ documente pas alpha ; on prend 0.1, valeur usuelle depuis Muller et al. 2019
 qu'il cite lui-meme.
 """
 
+import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,11 @@ def main():
     print("Defense LS - lissage des etiquettes (Algorithme 2)")
     print(f"Date : {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 78 + "\n")
+
+    parseur = argparse.ArgumentParser()
+    parseur.add_argument("--suffixe", default="",
+                         help="ajoute au nom des sorties, pour ne rien ecraser")
+    args = parseur.parse_args()
 
     cfg = load_config()
     torch.manual_seed(cfg.seed)
@@ -49,7 +55,8 @@ def main():
     base, nom_base = baseline_reference(cfg.paths["logs"])
     print(f"Reference : {nom_base}\n")
     bilan = resume(res, base, "Label Smoothing")
-    sauvegarder(cfg, "ls", model, res, hist, best_ep, best_acc, duree, bilan)
+    sauvegarder(cfg, "ls", model, res, hist, best_ep, best_acc,
+                duree, bilan, args.suffixe)
 
 
 if __name__ == "__main__":

@@ -214,15 +214,16 @@ def resume(res, base, nom_defense):
     return {"gain": gain, "cout": cout, "bilan": gain + cout, "rb_min": rb_min}
 
 
-def sauvegarder(cfg, nom, model, res, hist, best_ep, best_acc, duree, bilan):
-    ck = Path(cfg.paths["checkpoints"]) / f"defense_{nom}.pth"
+def sauvegarder(cfg, nom, model, res, hist, best_ep, best_acc, duree,
+                bilan, suffixe=""):
+    ck = Path(cfg.paths["checkpoints"]) / f"defense_{nom}{suffixe}.pth"
     ck.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state_dict": model.state_dict(), "epoch": best_ep,
                 "val_acc": best_acc, "defense": nom}, ck)
 
     from datetime import datetime
     sortie = (Path(cfg.paths["logs"]) /
-              f"defense_{nom}_{datetime.now():%Y%m%d_%H%M%S}.pkl")
+              f"defense_{nom}{suffixe}_{datetime.now():%Y%m%d_%H%M%S}.pkl")
     joblib.dump({"resultats": res, "historique": hist, "defense": nom,
                  "meilleur_epoch": best_ep, "duree_min": duree,
                  "bilan": bilan, "config": dict(cfg.defenses)}, sortie)

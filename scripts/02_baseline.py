@@ -46,6 +46,8 @@ def main():
     parseur = argparse.ArgumentParser()
     parseur.add_argument("--variante-lr", action="store_true",
                          help="lr reduit + scheduler au lieu du lr 0.01 du papier")
+    parseur.add_argument("--suffixe", default="",
+                         help="ajoute au nom des sorties")
     args = parseur.parse_args()
 
     print("=" * 70)
@@ -85,7 +87,7 @@ def main():
     if args.variante_lr:
         lr = var["learning_rate"]
         epochs = var.get("epochs", m["epochs"])
-        suffixe = "_varlr"
+        suffixe = "_varlr" + args.suffixe
         print(f"Variante : lr {lr}, {epochs} epochs, "
               f"scheduler {var['scheduler']}\n")
     else:

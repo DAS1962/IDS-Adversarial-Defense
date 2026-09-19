@@ -16,7 +16,7 @@ module load python/3.11
 source ~/ENV/bin/activate
 cd ~/IDS-Reproduction-Fidele
 
-python -u scripts/12_ensemble.py
+python -u scripts/12_ensemble.py "$@"
 statut=$?
 
 echo

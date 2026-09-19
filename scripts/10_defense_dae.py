@@ -19,6 +19,7 @@ entree SAINE : le reseau n'avait jamais appris a laisser passer une entree
 propre, donc il la "corrigeait" aussi.
 """
 
+import argparse
 import sys
 import time
 from datetime import datetime
@@ -38,9 +39,15 @@ from src.utils.commun import charger_donnees, metriques, predire
 from src.utils.config import load_config
 
 
-def charger_detecteur(cfg, device, quel="varlr"):
-    """Le detecteur d'origine, que le DAE protege sans le modifier."""
-    fichier = "baseline_varlr.pth" if quel == "varlr" else "baseline.pth"
+def charger_detecteur(cfg, device, quel="varlr", suffixe=""):
+    """
+    Le detecteur d'origine, que le DAE protege sans le modifier.
+
+    Le suffixe doit designer le meme baseline que celui servant de reference
+    aux gains, sinon on compare deux modeles differents.
+    """
+    fichier = (f"baseline_varlr{suffixe}.pth" if quel == "varlr"
+               else "baseline.pth")
     ck = torch.load(Path(cfg.paths["checkpoints"]) / fichier,
                     weights_only=False, map_location=device)
     model = DNN(input_dim=cfg.dataset["num_features"],
@@ -186,6 +193,11 @@ def main():
     print(f"Date : {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 78 + "\n")
 
+    parseur = argparse.ArgumentParser()
+    parseur.add_argument("--suffixe", default="",
+                         help="ajoute au nom des sorties, pour ne rien ecraser")
+    args = parseur.parse_args()
+
     cfg = load_config()
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
@@ -196,8 +208,9 @@ def main():
     _, _, X_va, y_va, _, _ = charger_donnees(cfg.paths["processed"])
     d = cfg.defenses["DenoisingAutoencoder"]
 
-    detecteur = charger_detecteur(cfg, device)
-    print("Detecteur charge, il n'est PAS reentraine\n")
+    detecteur = charger_detecteur(cfg, device, suffixe=args.suffixe)
+    print(f"Detecteur : baseline_varlr{args.suffixe}.pth, "
+          f"il n'est PAS reentraine\n")
 
     X_in, X_out = construire_paires(atk_dir, d["clean_ratio"])
     print()
@@ -222,11 +235,11 @@ def main():
     print(f"Reference : {nom_base}\n")
     bilan = resume(res, base, "Denoising Autoencoder")
 
-    ck = Path(cfg.paths["checkpoints"]) / "defense_dae.pth"
+    ck = Path(cfg.paths["checkpoints"]) / f"defense_dae{args.suffixe}.pth"
     torch.save({"model_state_dict": dae.state_dict(), "epoch": best_ep,
                 "f1_val": best_f1, "dims": dae.dims}, ck)
     sortie = (Path(cfg.paths["logs"]) /
-              f"defense_dae_{datetime.now():%Y%m%d_%H%M%S}.pkl")
+              f"defense_dae{args.suffixe}_{datetime.now():%Y%m%d_%H%M%S}.pkl")
     joblib.dump({"resultats": res, "historique": hist, "defense": "dae",
                  "meilleur_epoch": best_ep, "duree_min": duree,
                  "bilan": bilan, "config": dict(d)}, sortie)

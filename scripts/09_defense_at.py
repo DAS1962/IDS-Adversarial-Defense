@@ -13,6 +13,7 @@ Les deux jeux sont disjoints, donc le modele ne peut pas memoriser les
 perturbations qui serviront a le tester.
 """
 
+import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,11 @@ def main():
     print("Defense AT - entrainement adversarial (Algorithme 3)")
     print(f"Date : {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 78 + "\n")
+
+    parseur = argparse.ArgumentParser()
+    parseur.add_argument("--suffixe", default="",
+                         help="ajoute au nom des sorties, pour ne rien ecraser")
+    args = parseur.parse_args()
 
     cfg = load_config()
     torch.manual_seed(cfg.seed)
@@ -71,7 +77,8 @@ def main():
     g = np.mean([res[a]["f1_macro"] - base[a]["f1_macro"] for a in non_vues])
     print(f"\nGain sur PGD et C&W, absentes de l'entrainement : {g:+.4f}")
 
-    sauvegarder(cfg, "at", model, res, hist, best_ep, best_acc, duree, bilan)
+    sauvegarder(cfg, "at", model, res, hist, best_ep, best_acc,
+                duree, bilan, args.suffixe)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ Le papier ne publie que l'accuracy, precision, recall, F1 (Tables 4 et 5) et
 le MCC binaire (Table 9).
 """
 
+import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -86,6 +87,11 @@ def main():
     print(f"Date : {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 100 + "\n")
 
+    parseur = argparse.ArgumentParser()
+    parseur.add_argument("--suffixe", default="",
+                         help="suffixe des checkpoints et des sorties")
+    args = parseur.parse_args()
+
     cfg = load_config()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     labels = list(range(cfg.dataset["num_classes"]))
@@ -96,9 +102,13 @@ def main():
     print(f"Test : {len(y):,} lignes, {int((y == 0).sum()):,} benin "
           f"({100*frac:.1f}%), plancher a {100*frac:.1f}%\n")
 
+    # Le suffixe ne s'applique qu'a la variante : le baseline fidele reste
+    # celui du papier, lr 0.01 et 30 epochs, il n'a pas de variante longue.
+    n_ep = 150 if args.suffixe == "_ep150" else 100
     modeles = {
         "Baseline fidele (lr 0.01, 30 epochs)": "baseline.pth",
-        "Baseline lr reduit (lr 0.001, 100 epochs)": "baseline_varlr.pth",
+        f"Baseline lr reduit (lr 0.001, {n_ep} epochs)":
+            f"baseline_varlr{args.suffixe}.pth",
     }
 
     tous, infos = {}, {}
@@ -122,11 +132,11 @@ def main():
 
     fig_dir = Path(cfg.paths["figures"])
     fig_dir.mkdir(parents=True, exist_ok=True)
-    csv = fig_dir / "evaluation_baselines.csv"
+    csv = fig_dir / f"evaluation_baselines{args.suffixe}.csv"
     pd.DataFrame(lignes).to_csv(csv, index=False, float_format="%.6f")
     print(f"CSV : {csv}")
 
-    sortie = Path(cfg.paths["logs"]) / f"evaluation_{datetime.now():%Y%m%d_%H%M%S}.pkl"
+    sortie = Path(cfg.paths["logs"]) / f"evaluation{args.suffixe}_{datetime.now():%Y%m%d_%H%M%S}.pkl"
     joblib.dump({"resultats": tous, "infos": infos,
                  "n_test": len(y), "frac_benin": frac}, sortie)
     print(f"Sauvegarde : {sortie}")

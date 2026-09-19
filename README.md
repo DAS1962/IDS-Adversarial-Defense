@@ -84,22 +84,39 @@ Six points ne sont pas précisés. Chaque choix est justifié plutôt que subi.
 
 ---
 
-## Pipeline, six étapes
+## Pipeline complet
 
 ```bash
-sbatch scripts/01_pipeline_donnees.sh    # ~1 min  CPU
-sbatch scripts/02_baseline.sh            # ~6 min  GPU, lr 0.01
-sbatch scripts/02_baseline_varlr.sh      # ~18 min GPU, lr 0.001, 100 ep
-sbatch scripts/03_attaques.sh            # ~15 min GPU, substitut + 6 attaques
-sbatch scripts/04_evaluation.sh          # ~2 min  GPU
-python  scripts/05_tableau_comparaison.py
-python  scripts/06_figures.py
+sbatch scripts/01_pipeline_donnees.sh                      # ~1 min  CPU
+sbatch scripts/02_baseline.sh                              # ~6 min  lr 0.01
+sbatch scripts/02_baseline_varlr.sh --suffixe _ep150       # ~27 min lr 0.001
+sbatch scripts/03_attaques.sh                              # ~15 min substitut + 6 attaques
+sbatch scripts/04_evaluation.sh --suffixe _ep150           # ~2 min
+
+sbatch scripts/defense.sh 07_defense_ls  --suffixe _ep150  # ~31 min
+sbatch scripts/defense.sh 08_defense_ga  --suffixe _ep150  # ~32 min
+sbatch scripts/defense.sh 09_defense_at  --suffixe _ep150  # ~34 min
+sbatch scripts/defense.sh 10_defense_dae --suffixe _ep150  # ~7 min
+
+sbatch scripts/12_ensemble.sh --suffixe _ep150             # ~1 min
+
+python scripts/05_tableau_comparaison.py
+python scripts/06_figures.py
+python scripts/11_tableau_defenses.py  --suffixe _ep150
+python scripts/13_figures_defenses.py  --suffixe _ep150
 ```
+
+Les quatre défenses tournent en parallèle, mais **après** l'évaluation : elles
+comparent leurs gains au baseline qu'elle produit.
+
+Le `--suffixe` sépare les séries. Sans lui, les sorties portent les noms de la
+série à 100 passages ; avec `_ep150`, celles de la série longue. Rien n'est
+écrasé.
 
 Tous les hyperparamètres viennent de `configs/config.yaml`. Aucune valeur
 n'est codée en dur dans les scripts.
 
----
+Environ 2 h 15 de calcul pour tout le pipeline, dont 1 h 45 en parallèle.
 
 ## Étape 1 — Pipeline de données
 
@@ -333,32 +350,172 @@ excellent. C'est encore le plancher qui parle.
 
 ---
 
-## Étapes 5 et 6 — à faire
+## Étape 5 — Les quatre défenses
 
-| Étape | Ce que dit l'article | Statut |
+Algorithmes 2 à 5. **Les titres des Algorithmes 3 et 4 sont intervertis dans
+l'article** : le 3 est intitulé « Gaussian Augmentation » mais décrit
+l'entraînement adversarial, le 4 l'inverse. On suit le contenu.
+
+Le lissage est appliqué aux trois défenses d'entraînement, comme le
+prescrivent les Algorithmes 2, 3 et 4 (« and smooth train labels »). Pas au
+DAE, qui n'a pas d'étiquettes à lisser puisqu'il optimise une MSE de
+reconstruction.
+
+**Point clé du protocole.** Les 40 000 exemples adversariaux d'entraînement
+viennent du **train**, les 20 000 d'évaluation du **test**. Les deux jeux
+sont disjoints, donc aucune mémorisation n'est possible. C'est ce qui
+manquait sur `main`, où une défense entraînée sur la même distribution que
+l'évaluation atteignait un F1 de 0,9651 sous BIM, supérieur à son F1 sur
+données propres.
+
+### Résultats, 150 passages
+
+| Défense | Gain | Coût propre | Bilan net | Rappel BENIGN min |
+|---|---:|---:|---:|---:|
+| **Adversarial** | **+0,5001** | −0,0483 | **+0,4517** | 0,9014 |
+| Autoencodeur | +0,0511 | −0,4662 | −0,4151 | **0,9527** |
+| Gaussienne (σ=0,01) | +0,0436 | −0,2637 | −0,2201 | 0,9297 |
+| Lissage | +0,0161 | −0,0459 | −0,0298 | 0,7495 |
+
+Le gain est la moyenne des écarts au baseline sur les six attaques, le coût
+l'écart sur données propres, le bilan net leur somme.
+
+### Le classement est l'inverse du leur
+
+| Rang | Papier (Table 7) | Nous (bilan net) |
 |---|---|---|
-| Lissage des étiquettes | Algorithme 2, alpha non documenté | à faire |
-| Augmentation gaussienne | Algorithme 3 (mal intitulé), sigma non documenté | à faire |
-| Entraînement adversarial | Algorithme 4 (mal intitulé), sur les 4 attaques de l'échantillon train | à faire |
-| Autoencodeur débruiteur | Algorithme 5, sur clean + adversarial | à faire |
-| Ensemble | vote majoritaire, soft voting, moyenne pondérée optimisée | à faire |
+| 1 | Label Smoothing 85,90 % | **Adversarial** +0,4517 |
+| 2 | Denoising Autoencoder 84,80 % | Lissage −0,0298 |
+| 3 | Adversarial Training 80,25 % | Gaussienne −0,2201 |
+| 4 | Gaussian Augmentation 79,80 % | Autoencodeur −0,4151 |
 
-À cette étape, leur **Table 9** publie un MCC binaire par défense — LS 0,698,
-DAE 0,680, AT 0,608, GA 0,596. Ce sera une comparaison directe de plus.
-Le calcul est déjà en place dans `src/utils/commun.py`.
+### Face à leur Table 7, en moyenne micro sur les sept jeux
 
-Leurs résultats de référence, Table 7 :
+| Défense | Papier | Nous | Écart |
+|---|---:|---:|---:|
+| **Adversarial** | 80,25 % | **85,75 %** | **+5,5** |
+| Gaussienne | 79,80 % | 62,72 % | −17,1 |
+| Autoencodeur | 84,80 % | 60,21 % | −24,6 |
+| Lissage | 85,90 % | 57,19 % | −28,7 |
 
-| Défense | Accuracy |
-|---|---:|
-| Label Smoothing | 85,90 % |
-| Denoising Autoencoder | 84,80 % |
-| Ensemble (majority voting) | 84,35 % |
-| Adversarial Training | 80,25 % |
-| Gaussian Augmentation | 79,80 % |
-| **Ensemble optimisé (soft voting)** | **87,49 %** |
+**L'entraînement adversarial est le seul point du projet où nous dépassons
+leurs chiffres**, sur leur protocole et leur métrique.
 
----
+### Face à leur Table 9, MCC binaire
+
+| Défense | Papier | Nous, propre | Nous, pire attaque |
+|---|---:|---:|---:|
+| Adversarial | 0,608 | **0,878** | **0,280** |
+| Lissage | 0,698 | 0,889 | **−0,105** |
+| Autoencodeur | 0,680 | 0,417 | 0,106 |
+| Gaussienne | 0,596 | 0,657 | 0,053 |
+
+**Le MCC du lissage devient négatif sous FGSM.** Le modèle fait alors pire
+qu'un tirage au sort pour distinguer attaque et trafic normal. Aucune des
+métriques du papier ne le montrerait.
+
+### Adversarial : le seul gain qui généralise
+
+PGD et C&W ne figurent pas dans les quatre attaques d'entraînement. Leur gain
+mesure donc une vraie généralisation, pas une reconnaissance de forme.
+
+**Gain sur PGD et C&W seuls : +0,2735.** PGD passe de 0,0442 à 0,5912.
+
+### Gaussienne : sigma doit être à l'échelle des données
+
+L'écart-type moyen des 58 features non fonctionnelles vaut **0,0537**, contre
+0,103 sur `main`. Le même sigma représente donc deux fois plus de bruit
+relatif.
+
+| sigma | Gain | F1 propre | Bilan net | Rappel BENIGN min |
+|---:|---:|---:|---:|---:|
+| 0,02 (37 % du signal) | −0,0015 | 0,4159 | −0,3830 | **0,0458** |
+| **0,01 (19 % du signal)** | **+0,0436** | **0,5337** | **−0,2201** | **0,9297** |
+
+À sigma 0,02, le modèle **rejette 95 % du trafic légitime sous JSMA**.
+Diviser sigma par deux fait disparaître l'effondrement.
+
+Mais le modèle plafonne dans les deux cas — meilleur passage au 14 puis au 19
+sur 150. Le niveau de bruit n'est donc pas la cause du plafonnement.
+
+Et son gain vient presque entièrement de DeepFool (+0,2334 sur +0,0436), où
+son F1 sous attaque (0,5329) est **identique à son F1 propre** (0,5337) : la
+perturbation de DeepFool est plus petite que le bruit d'entraînement, donc
+l'attaque devient invisible. Ce n'est pas de la défense.
+
+### Autoencodeur : une MSE basse ne suffit pas
+
+Le DAE reconstruit presque parfaitement une entrée saine — MSE(x, DAE(x)) =
+0,000029, soit **0,0 % de la variance**. Et pourtant le F1 macro chute de
+0,7974 à 0,3313.
+
+La raison : **12 features sur 58 perdent plus de la moitié de leur
+écart-type**. Le DAE préserve l'énergie globale du signal mais écrase la
+variabilité de douze colonnes, précisément celle qui distingue les classes.
+
+Sa fonction de coût est par ailleurs dominée par JSMA, dont la corruption
+vaut 0,781344 contre 0,000012 pour DeepFool — un rapport de 65 000. Il
+consacre tout son budget à une attaque qu'il n'arrive pas à corriger.
+
+## Étape 6 — Agrégation par ensemble
+
+Le papier donne deux règles de fusion et leurs versions optimisées. Son « soft
+voting » est la moyenne des probabilités à poids égaux, et c'est elle qui lui
+donne son meilleur résultat.
+
+| Méthode | Gain | Coût | Bilan net | Accuracy moy. | Papier |
+|---|---:|---:|---:|---:|---:|
+| Moyenne optimisée | +0,1292 | −0,0540 | **+0,0753** | 67,67 % | 86,11 % |
+| Vote majoritaire | +0,0952 | −0,1793 | −0,0841 | 65,63 % | 84,35 % |
+| Poids égaux | +0,0939 | −0,1794 | −0,0855 | 65,56 % | 87,49 % |
+
+**Leur proposition centrale ne se vérifie pas ici.** L'adversarial seul
+(+0,4517) fait six fois mieux que le meilleur ensemble (+0,0753).
+
+La raison est mécanique : un ensemble ne dépasse ses membres que s'ils sont de
+qualité comparable et se trompent différemment. Ici trois membres sur quatre
+ne détectent presque rien, donc l'agrégation noie le seul qui fonctionne.
+Sous BIM, l'adversarial atteint 0,9778 seul mais l'ensemble tombe à 0,1816 :
+les trois autres votent contre lui et l'emportent.
+
+**Sur `main`, où les quatre défenses étaient de niveau voisin, on obtenait le
+résultat inverse.** La conclusion du papier dépend donc de la qualité relative
+des membres, pas de l'agrégation en elle-même.
+
+L'optimisation des poids le montre bien : elle retient lissage 0,4608 et
+adversarial 0,4608, écartant la gaussienne à 0,0196. Mais elle optimise sur
+la validation **propre**, où lissage et adversarial ont des F1 quasi
+identiques (0,7515 et 0,7491). Elle ne peut pas voir que l'adversarial vaut
+dix fois plus sous attaque.
+
+*Écart à noter : le papier optimise l'**accuracy** par optimisation
+bayésienne, 50 itérations et 100 points initiaux. Nous optimisons le F1 macro
+par Nelder-Mead. Maximiser l'accuracy récompenserait un ensemble classant
+tout en bénin, puisqu'elle est plafonnée par la proportion de trafic normal.*
+
+**Un bénéfice réel malgré tout** : le rappel BENIGN minimal passe de 0,7495
+pour le lissage seul à 0,9577 pour l'ensemble. L'agrégation protège contre
+l'effondrement d'un membre, même si elle n'améliore pas la détection.
+
+## Effet de la durée d'entraînement
+
+Deux séries complètes, à 100 et 150 passages, tout le reste identique.
+
+| | Bilan à 100 | Bilan à 150 | Écart |
+|---|---:|---:|---:|
+| Adversarial | +0,4524 | +0,4517 | **−0,0007** |
+| Lissage | −0,0262 | −0,0298 | −0,0036 |
+| Gaussienne | −0,3830 | −0,2201 | +0,1629 |
+| Autoencodeur | −0,5585 | −0,4151 | +0,1434 |
+
+**La durée ne change rien.** L'adversarial bouge de 0,0007, le lissage de
+0,0036. Les deux écarts importants viennent d'ailleurs : la gaussienne du
+sigma divisé par deux, l'autoencodeur d'un meilleur passage trouvé par hasard
+dans un F1 de validation qui oscille sans converger.
+
+Le baseline lui-même donne des chiffres **rigoureusement identiques** à 100 et
+150 passages — accuracy 98,42 %, F1 macro 77,68 %, meilleur passage 93 dans
+les deux cas. Il avait convergé.
 
 ## Incohérences relevées dans l'article
 
@@ -411,25 +568,38 @@ précisément les deux attaques qui divergent.
 
 ```
 results/
-├── checkpoints/   baseline.pth, baseline_varlr.pth, substitut.pth
-├── attacks/        X_train_clean, X_test_clean + 12 X_adv (6 attaques × 2 échantillons)
-├── logs/           historiques d'entraînement et résultats d'évaluation
+├── checkpoints/
+│   ├── baseline.pth                  lr 0.01, 30 passages
+│   ├── baseline_varlr_ep150.pth      lr 0.001, 150 passages
+│   ├── substitut.pth                 58-100-100-15
+│   └── defense_{ls,ga,at,dae}_ep150.pth
+├── attacks/
+│   ├── X_{train,test}_clean.pkl      40 000 et 20 000 lignes, 50 % bénin
+│   └── X_adv_{train,test}_*.pkl      6 attaques × 2 échantillons
+├── logs/                             historiques et résultats de chaque run
 └── figures/
-    ├── baselines_courbes.png          les trois entraînements
-    ├── accuracy_trois_colonnes.png    papier / fidèle / variante
-    ├── ecarts_papier.png              écart par attaque
-    ├── f1_types_moyenne.png           macro / pondéré / micro
-    ├── heatmap_metriques.png          toutes les métriques, deux modèles
-    ├── rappel_benign.png              trafic normal
-    ├── perturbations.png              amplitude des six attaques
-    ├── evaluation_baselines.csv       source unique des chiffres
-    └── comparaison_papier.csv         trois colonnes
+    ├── baselines_courbes.png         les trois entraînements du détecteur
+    ├── accuracy_trois_colonnes.png   papier / fidèle / variante
+    ├── ecarts_papier.png             écart par attaque
+    ├── f1_types_moyenne.png          macro / pondéré / micro
+    ├── heatmap_metriques.png         toutes les métriques, deux baselines
+    ├── rappel_benign.png             trafic normal, baselines
+    ├── perturbations.png             amplitude des six attaques
+    ├── defenses_f1_ep150.png         F1 macro par attaque, 4 défenses
+    ├── defenses_gain_cout_ep150.png  le compromis de chaque défense
+    ├── defenses_vs_papier_ep150.png  face à leur Table 7
+    ├── defenses_mcc_ep150.png        face à leur Table 9
+    ├── defenses_recall_ep150.png     rappel BENIGN, 4 défenses
+    ├── defenses_heatmap_ep150.png    tout, défenses et ensemble
+    ├── defenses_courbes_ep150.png    entraînement des 3 défenses
+    ├── evaluation_baselines_ep150.csv
+    ├── comparaison_papier.csv
+    ├── defenses_completes_ep150.csv
+    └── ensemble_complet_ep150.csv
 ```
 
-**Aucun chiffre de ce document n'est recopié à la main.** Ils viennent tous de
-`evaluation_baselines.csv`, produit par `scripts/04_evaluation.py`.
-
----
+**Aucun chiffre de ce document n'est recopié à la main.** Ils viennent tous
+des CSV, produits par les scripts `04`, `11` et `12`.
 
 ## Environnement
 

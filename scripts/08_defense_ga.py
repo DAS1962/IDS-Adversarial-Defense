@@ -12,6 +12,7 @@ Le papier ne documente pas sigma ; on prend 0.02, valeur retenue apres le
 balayage 0.02 / 0.05 / 0.1 fait sur la branche main.
 """
 
+import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +32,11 @@ def main():
     print("Defense GA - augmentation gaussienne (Algorithme 4)")
     print(f"Date : {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 78 + "\n")
+
+    parseur = argparse.ArgumentParser()
+    parseur.add_argument("--suffixe", default="",
+                         help="ajoute au nom des sorties, pour ne rien ecraser")
+    args = parseur.parse_args()
 
     cfg = load_config()
     torch.manual_seed(cfg.seed)
@@ -54,7 +60,8 @@ def main():
     base, nom_base = baseline_reference(cfg.paths["logs"])
     print(f"Reference : {nom_base}\n")
     bilan = resume(res, base, f"Gaussian Augmentation (sigma={sigma})")
-    sauvegarder(cfg, "ga", model, res, hist, best_ep, best_acc, duree, bilan)
+    sauvegarder(cfg, "ga", model, res, hist, best_ep, best_acc,
+                duree, bilan, args.suffixe)
 
 
 if __name__ == "__main__":

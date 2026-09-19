@@ -22,6 +22,7 @@ Le papier ne dit pas sur quoi il optimise ; le faire sur le jeu d'evaluation
 reviendrait a y ajuster un hyperparametre.
 """
 
+import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -43,13 +44,13 @@ ORDRE = ["Clean"] + ATTAQUES
 NOMS = {"ls": "LS", "ga": "GA", "at": "AT", "dae": "DAE"}
 
 
-def charger_defenses(cfg, device):
+def charger_defenses(cfg, device, suffixe=""):
     """Les trois detecteurs reentraines, plus le DAE et le detecteur d'origine."""
     ck_dir = Path(cfg.paths["checkpoints"])
     modeles = {}
 
     for court in ("ls", "ga", "at"):
-        chemin = ck_dir / f"defense_{court}.pth"
+        chemin = ck_dir / f"defense_{court}{suffixe}.pth"
         if not chemin.exists():
             raise RuntimeError(f"{chemin} manquant")
         ck = torch.load(chemin, weights_only=False, map_location=device)
@@ -59,10 +60,10 @@ def charger_defenses(cfg, device):
         m.load_state_dict(ck["model_state_dict"])
         m.eval()
         modeles[court] = m
-        print(f"  {NOMS[court]:<4} defense_{court}.pth (epoch {ck['epoch']})")
+        print(f"  {NOMS[court]:<4} defense_{court}{suffixe}.pth (epoch {ck['epoch']})")
 
     # Le DAE ne remplace pas le detecteur, il le precede.
-    ck = torch.load(ck_dir / "defense_dae.pth", weights_only=False,
+    ck = torch.load(ck_dir / f"defense_dae{suffixe}.pth", weights_only=False,
                     map_location=device)
     d = cfg.defenses["DenoisingAutoencoder"]
     dae = DAE(input_dim=cfg.dataset["num_features"],
@@ -70,14 +71,14 @@ def charger_defenses(cfg, device):
     dae.load_state_dict(ck["model_state_dict"])
     dae.eval()
 
-    ck = torch.load(ck_dir / "baseline_varlr.pth", weights_only=False,
+    ck = torch.load(ck_dir / f"baseline_varlr{suffixe}.pth", weights_only=False,
                     map_location=device)
     detecteur = DNN(input_dim=cfg.dataset["num_features"],
                     hidden=tuple(cfg.model["hidden_layers"]),
                     output_dim=cfg.dataset["num_classes"]).to(device)
     detecteur.load_state_dict(ck["model_state_dict"])
     detecteur.eval()
-    print(f"  DAE  defense_dae.pth + baseline_varlr.pth (epoch {ck['epoch']})")
+    print(f"  DAE  defense_dae{suffixe}.pth + baseline_varlr{suffixe}.pth (epoch {ck['epoch']})")
 
     return modeles, dae, detecteur
 
@@ -157,6 +158,11 @@ def main():
     print(f"Date : {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 92 + "\n")
 
+    parseur = argparse.ArgumentParser()
+    parseur.add_argument("--suffixe", default="",
+                         help="suffixe des checkpoints et des sorties")
+    args = parseur.parse_args()
+
     cfg = load_config()
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
@@ -165,7 +171,7 @@ def main():
     atk_dir = Path(cfg.paths["attacks"])
 
     print("Chargement des quatre defenses :")
-    modeles, dae, detecteur = charger_defenses(cfg, device)
+    modeles, dae, detecteur = charger_defenses(cfg, device, args.suffixe)
     print()
 
     _, _, X_va, y_va, _, _ = charger_donnees(cfg.paths["processed"])
@@ -253,15 +259,22 @@ def main():
           f"{100*bilans['Moyenne, poids optimises']['micro']:>8.2f}% {84.45:>8.2f}%")
     print(f"{'Moyenne ponderee optimisee':<28} {'—':>9} {86.11:>8.2f}%")
     print()
-    meilleure_def = 0.4524  # AT
-    print(f"Meilleure defense seule (AT), bilan net : {meilleure_def:+.4f}")
+    # Meilleure defense seule, lue depuis les resultats plutot que codee
+    meilleure_def, nom_meilleure = -9.9, "?"
+    for court in ("ls", "ga", "at", "dae"):
+        fs = sorted(Path(cfg.paths["logs"]).glob(f"defense_{court}{args.suffixe}_*.pkl"))
+        if fs:
+            b = joblib.load(fs[-1])["bilan"]["bilan"]
+            if b > meilleure_def:
+                meilleure_def, nom_meilleure = b, NOMS[court]
+    print(f"Meilleure defense seule ({nom_meilleure}), bilan net : {meilleure_def:+.4f}")
     for nom, b in bilans.items():
         marque = "  <-- depasse AT" if b["bilan"] > meilleure_def else ""
         print(f"  {nom:<28} {b['bilan']:>+8.4f}{marque}")
     print("=" * 92)
 
     sortie = (Path(cfg.paths["logs"]) /
-              f"ensemble_{datetime.now():%Y%m%d_%H%M%S}.pkl")
+              f"ensemble{args.suffixe}_{datetime.now():%Y%m%d_%H%M%S}.pkl")
     joblib.dump({"resultats": resultats, "poids_optimises": poids_opt,
                  "f1_val_optimisation": f1_val, "bilans": bilans}, sortie)
 
@@ -272,7 +285,7 @@ def main():
             d.update({k: v for k, v in res[a].items()
                       if k not in ("confusion_matrix", "attaque")})
             lignes.append(d)
-    csv = Path(cfg.paths["figures"]) / "ensemble_complet.csv"
+    csv = Path(cfg.paths["figures"]) / f"ensemble_complet{args.suffixe}.csv"
     pd.DataFrame(lignes).to_csv(csv, index=False, float_format="%.6f")
     print(f"\nResultats : {sortie}")
     print(f"CSV       : {csv}")
